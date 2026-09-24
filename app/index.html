@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f5f3ee" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#171716" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Daily">
+  <title>Daily</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="heading">
+      <h1 id="title">Today</h1>
+      <p id="date" class="sub"></p>
+    </div>
+    <button id="status" class="status" type="button" title="Sync now">
+      <span class="dot" aria-hidden="true"></span><span id="status-text">On this device only</span>
+    </button>
+    <button id="open-settings" class="icon-btn" type="button" aria-label="Settings">
+      <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor" d="M19.4 13a7.6 7.6 0 0 0 0-2l2-1.6-2-3.4-2.4 1a7.4 7.4 0 0 0-1.7-1L15 3.5h-4L10.6 6a7.4 7.4 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7.6 7.6 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7.4 7.4 0 0 0 1.7 1l.4 2.5h4l.4-2.5a7.4 7.4 0 0 0 1.7-1l2.4 1 2-3.4-2.1-1.6ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"/></svg>
+    </button>
+  </header>
+
+  <main>
+    <section id="view-today">
+      <section class="card">
+        <div class="card-head">
+          <h2>Daily</h2>
+          <span id="daily-progress" class="pill"></span>
+          <button id="edit-habits" class="link" type="button">Edit</button>
+        </div>
+        <p class="hint">Resets every morning. Each check adds to the count.</p>
+        <ul id="habits" class="list"></ul>
+        <form id="add-habit" class="add">
+          <input name="text" placeholder="Add a daily habit" autocomplete="off" enterkeyhint="done" aria-label="New daily habit">
+          <button type="submit" aria-label="Add daily habit">+</button>
+        </form>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>To do</h2>
+          <span id="task-count" class="pill"></span>
+        </div>
+        <p class="hint">Checking a task moves it to the archive.</p>
+        <ul id="tasks" class="list"></ul>
+        <form id="add-task" class="add">
+          <input name="text" placeholder="Add a task" autocomplete="off" enterkeyhint="done" aria-label="New task">
+          <button type="submit" aria-label="Add task">+</button>
+        </form>
+      </section>
+    </section>
+
+    <section id="view-archive" hidden>
+      <section class="card">
+        <div class="card-head"><h2>Totals</h2></div>
+        <div id="stats"></div>
+      </section>
+      <div id="archive"></div>
+      <section id="retired-card" class="card" hidden>
+        <div class="card-head"><h2>Retired daily habits</h2></div>
+        <ul id="retired" class="list plain"></ul>
+      </section>
+    </section>
+  </main>
+
+  <nav class="tabs" aria-label="Views">
+    <button type="button" data-view="today" class="active">Today</button>
+    <button type="button" data-view="archive">Archive</button>
+  </nav>
+
+  <div id="toast" class="toast" role="status" hidden>
+    <span id="toast-text"></span>
+    <button id="toast-undo" type="button">Undo</button>
+  </div>
+
+  <dialog id="settings">
+    <form id="settings-form" method="dialog">
+      <h2>Back up to GitHub</h2>
+      <p class="hint">Your list is saved on this device and copied to a GitHub repository after every change. If you lose your phone, sign in on a new one with the same settings and everything comes back.</p>
+      <label>GitHub user or organisation <input name="owner" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="your-username"></label>
+      <label>Repository <input name="repo" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="todo-data"></label>
+      <div class="row2">
+        <label>Branch <input name="branch" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="main"></label>
+        <label>Folder <input name="folder" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Todo"></label>
+      </div>
+      <label>Access token <input name="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
+      <p class="hint">Use a fine-grained token that can only reach this one repository, with <b>Contents: Read and write</b>. It is stored only on this device.</p>
+      <p id="settings-error" class="error" hidden></p>
+      <div class="actions">
+        <button type="button" id="backup" class="secondary">Download backup</button>
+        <span class="spacer"></span>
+        <button type="button" id="settings-cancel" class="secondary">Cancel</button>
+        <button type="submit" id="settings-save">Save &amp; sync</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>
