@@ -30,7 +30,7 @@ If you lose your phone, open the app on a new one and enter the same settings. E
    - Repository access: *Only select repositories* → `todo-data`
    - Permissions: **Contents → Read and write**
 3. **Host the app:**
-   - **GitHub Pages:** in this repository, go to Settings → Pages → Source: *GitHub Actions*, then merge this branch into `main`. The workflow publishes the `app/` folder. On the free plan, Pages only works for public repositories. The app code contains no personal data, so it's safe for this repository to be public.
+   - **GitHub Pages:** in this repository, go to Settings → Pages → Source: *GitHub Actions*, then push to `master`. The workflow publishes the `app/` folder. On the free plan, Pages only works for public repositories. The app code contains no personal data, so it's safe for this repository to be public.
    - **Cloudflare Pages** (works with a private repository): Workers & Pages → Create → Pages → connect this repository, set the build command to empty and the output directory to `app`.
 4. On your phone, open the site, then use **Share → Add to Home Screen** (iPhone) or **Install app** (Android).
 5. Tap the ⚙ button, enter your GitHub username, `todo-data` and the token, then tap **Save & sync**.
