@@ -4,6 +4,8 @@ A small to-do app for your phone that backs everything up to a GitHub repository
 
 - **Daily:** habits that reset every morning. Each check adds to that habit's total and streak.
 - **To do:** one-off tasks. When you check a task, it moves to the archive. Nothing is ever deleted.
+- **Symptoms today:** choose mild, moderate or acute, then tap a symptom from the list (or type a new one, which then joins the list). Log it again each time it happens. You can add a note to any entry, and they clear from the Today screen at midnight.
+- **Symptoms tab:** a summary and day-by-day log for any date range, with a large-text **Read to doctor** view, **Share .txt** (email, messages, …) and **Copy**.
 - **Archive:** everything you've finished, grouped by day, with totals. You can move any task back to your list.
 - Drag the `⋮⋮` handle to reorder items. Tap an item's text to edit it.
 - Works offline. Changes are saved on the device and sent to GitHub after every edit, or as soon as the phone is back online.
@@ -17,6 +19,7 @@ Todo/
   data.json               everything the app knows (this is what a new phone loads)
   Todo.md                 today's habits and open tasks, as a normal markdown checklist
   Archive/2026-09-24.md   what you finished that day
+  Symptoms/2026-09-24.md  symptoms logged that day
 ```
 
 The `.md` files are plain Obsidian-style checklists. If your Obsidian vault is in that repository (for example through the Obsidian Git plugin), set the app's **Folder** to a folder inside the vault. The app writes those files, so edit your lists in the app rather than in Obsidian; edits made in Obsidian get overwritten.

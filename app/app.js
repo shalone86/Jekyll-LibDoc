@@ -40,6 +40,7 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
 /* ---------- data ----------
  * tasks:  { id, text, order, created, doneAt, doneDay, updated }   doneAt set = archived
  * habits: { id, text, order, created, retired, updated, log: { 'YYYY-MM-DD': { done, at } } }
+ * symptoms: { id, name, day, time, at, severity (1 mild, 2 moderate, 3 acute), note, removed, updated }
  * Nothing is ever deleted, so two devices can always be merged item by item.
  */
 
@@ -49,6 +50,7 @@ function normalize(d) {
     version: 1,
     tasks: Array.isArray(d.tasks) ? d.tasks : [],
     habits: Array.isArray(d.habits) ? d.habits.map((h) => ({ ...h, log: h.log || {} })) : [],
+    symptoms: Array.isArray(d.symptoms) ? d.symptoms : [],
   };
 }
 
@@ -117,6 +119,89 @@ function reorder(list, ids) {
   change();
 }
 
+/* ---------- symptoms ---------- */
+
+const SEVERITY = { 1: 'Mild', 2: 'Moderate', 3: 'Acute' };
+const COMMON_SYMPTOMS = [
+  'Headache', 'Migraine', 'Fatigue', 'Dizziness', 'Nausea', 'Vomiting', 'Fever', 'Chills', 'Sweating',
+  'Cough', 'Sore throat', 'Runny nose', 'Congestion', 'Sneezing', 'Shortness of breath', 'Wheezing',
+  'Chest pain', 'Heart palpitations', 'Stomach ache', 'Heartburn', 'Bloating', 'Diarrhea', 'Constipation',
+  'Loss of appetite', 'Back pain', 'Neck pain', 'Joint pain', 'Muscle aches', 'Cramps', 'Swelling',
+  'Numbness or tingling', 'Rash', 'Itching', 'Ear pain', 'Blurred vision', 'Dry eyes', 'Insomnia',
+  'Brain fog', 'Anxiety', 'Low mood', 'Irritability',
+];
+let severity = 1;
+let showAllChips = false;
+
+const liveSymptoms = () => data.symptoms.filter((s) => !s.removed);
+const nowTime = (d = new Date()) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+const shortDate = (s) => { const d = parseDay(s); return `${d.getDate()} ${MONTHS[d.getMonth()].slice(0, 3)} ${d.getFullYear()}`; };
+
+// Your most-used symptoms come first, then anything else you've ever logged, then the common list.
+function symptomNames() {
+  const since = addDays(dayKey(), -90);
+  const uses = new Map();
+  for (const s of liveSymptoms()) uses.set(s.name, (uses.get(s.name) || 0) + (s.day >= since ? 1 : 0));
+  const logged = [...uses.keys()].sort((a, b) => uses.get(b) - uses.get(a) || a.localeCompare(b));
+  const seen = new Set(logged.map((n) => n.toLowerCase()));
+  return [...logged, ...COMMON_SYMPTOMS.filter((n) => !seen.has(n.toLowerCase()))];
+}
+const canonicalName = (text) => symptomNames().find((n) => n.toLowerCase() === text.toLowerCase()) || text;
+
+function logSymptom(name) {
+  const now = new Date();
+  const s = {
+    id: uid(), name: canonicalName(name), day: dayKey(now), time: nowTime(now), at: now.getTime(),
+    severity, note: '', removed: false, updated: now.getTime(),
+  };
+  data.symptoms.push(s);
+  change();
+  toast(`Logged ${s.name} · ${SEVERITY[s.severity].toLowerCase()}`, () => { touch(s, { removed: true }); change(); });
+}
+function removeSymptom(id) {
+  const s = find(data.symptoms, id);
+  touch(s, { removed: true });
+  change();
+  toast(`Removed ${s.name} at ${s.time}`, () => { touch(s, { removed: false }); change(); });
+}
+function cycleSeverity(id) { const s = find(data.symptoms, id); touch(s, { severity: (s.severity % 3) + 1 }); change(); }
+function setSymptomNote(id, note) { touch(find(data.symptoms, id), { note }); change(); }
+
+function symptomReport(from, to) {
+  const entries = liveSymptoms().filter((s) => s.day >= from && s.day <= to).sort((a, b) => a.at - b.at);
+  const byName = new Map();
+  for (const s of entries) {
+    const x = byName.get(s.name) || { name: s.name, times: 0, days: new Set(), sev: [0, 0, 0, 0], first: s.day, last: s.day };
+    x.times++; x.days.add(s.day); x.sev[s.severity]++; x.last = s.day;
+    byName.set(s.name, x);
+  }
+  const summary = [...byName.values()].sort((a, b) => b.times - a.times || a.name.localeCompare(b.name));
+  let byDay = new Map();
+  for (const s of entries) (byDay.get(s.day) || byDay.set(s.day, []).get(s.day)).push(s);
+  byDay = new Map([...byDay].sort((a, b) => b[0].localeCompare(a[0])));
+  return { from, to, entries, summary, byDay };
+}
+const severityBreakdown = (sev) => [1, 2, 3].filter((n) => sev[n]).map((n) => `${sev[n]} ${SEVERITY[n].toLowerCase()}`).join(', ');
+const summaryLine = (x) => `${plural(x.times, 'time')} on ${plural(x.days.size, 'day')} · ${severityBreakdown(x.sev)} · `
+  + (x.first === x.last ? `on ${shortDate(x.first)}` : `first ${shortDate(x.first)}, last ${shortDate(x.last)}`);
+const entryLine = (s) => `${s.time}  ${s.name} (${SEVERITY[s.severity].toLowerCase()})${s.note ? ` – ${s.note}` : ''}`;
+
+function reportText(r) {
+  const days = Math.round((parseDay(r.to) - parseDay(r.from)) / 864e5) + 1;
+  const lines = ['SYMPTOM LOG', `${shortDate(r.from)} – ${shortDate(r.to)} (${plural(days, 'day')})`, 'Severity scale: mild, moderate, acute', ''];
+  if (!r.entries.length) lines.push('No symptoms logged in this period.');
+  else {
+    lines.push('SUMMARY');
+    for (const x of r.summary) lines.push(`${x.name}: ${summaryLine(x)}`);
+    lines.push('', 'BY DAY');
+    for (const [day, list] of r.byDay) {
+      lines.push('', longDate(day));
+      for (const s of list) lines.push(`  ${entryLine(s)}`);
+    }
+  }
+  return lines.join('\n') + '\n';
+}
+
 /* ---------- merge (used when another device has pushed changes) ---------- */
 
 function mergeById(a, b, pick) {
@@ -134,6 +219,7 @@ function mergeData(local, remote) {
       for (const [d, e] of Object.entries(y.log)) if (!log[d] || e.at > log[d].at) log[d] = e;
       return { ...newer(x, y), log };
     }),
+    symptoms: mergeById(local.symptoms, remote.symptoms, newer),
   };
 }
 
@@ -186,6 +272,10 @@ function buildFiles() {
     [repoPath('Todo.md')]: todoMarkdown(),
   };
   for (const [day, entry] of archiveByDay()) files[repoPath(`Archive/${day}.md`)] = archiveMarkdown(day, entry);
+  const { byDay } = symptomReport('0000-00-00', '9999-99-99');
+  for (const [day, list] of byDay) {
+    files[repoPath(`Symptoms/${day}.md`)] = [`# Symptoms · ${longDate(day)}`, '', ...list.map((s) => `- ${entryLine(s)}`), ''].join('\n');
+  }
   return files;
 }
 
@@ -272,9 +362,9 @@ async function syncOnce() {
   for (const [path, content] of Object.entries(files)) {
     if (remote.get(path) !== await gitBlobSha(content)) changes.push({ path, mode: '100644', type: 'blob', content });
   }
-  const archiveDir = repoPath('Archive/');
+  const generatedDirs = [repoPath('Archive/'), repoPath('Symptoms/')];
   for (const path of remote.keys()) {
-    if (path.startsWith(archiveDir) && /\/\d{4}-\d\d-\d\d\.md$/.test(path) && !(path in files)) {
+    if (generatedDirs.some((dir) => path.startsWith(dir)) && /\/\d{4}-\d\d-\d\d\.md$/.test(path) && !(path in files)) {
       changes.push({ path, mode: '100644', type: 'blob', sha: null });
     }
   }
@@ -340,15 +430,15 @@ let renderPending = false;
 let editingHabits = false;
 let archiveDays = 30;
 
-function editableText(text, onRename) {
-  const span = el('span', { class: 'text', contenteditable: 'true', spellcheck: 'false', enterkeyhint: 'done' }, text);
+function editableText(text, onRename, { allowEmpty = false, placeholder = null } = {}) {
+  const span = el('span', { class: 'text', contenteditable: 'true', spellcheck: 'false', enterkeyhint: 'done', 'data-placeholder': placeholder }, text);
   span.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
     if (e.key === 'Escape') { span.textContent = text; span.blur(); }
   });
   span.addEventListener('blur', () => {
     const value = clean(span.textContent);
-    if (!value) span.textContent = text;
+    if (!value && !allowEmpty) span.textContent = text;
     else if (value !== text) onRename(value);
   });
   return span;
@@ -365,7 +455,9 @@ function render() {
   renderedDay = dayKey();
   $('#date').textContent = longDate(renderedDay);
   renderToday();
+  renderSymptomsToday();
   renderArchive();
+  renderSymptomLog();
 }
 
 function renderToday() {
@@ -447,6 +539,98 @@ function renderArchive() {
     el('button', { class: 'small-btn', type: 'button', onclick: () => setRetired(h.id, false) }, 'Bring back'))));
 }
 
+function renderSymptomChips() {
+  const query = clean($('#add-symptom').text.value).toLowerCase();
+  const names = symptomNames();
+  let shown;
+  if (query) {
+    shown = names.filter((n) => n.toLowerCase().includes(query));
+  } else {
+    shown = showAllChips ? names : names.slice(0, 12);
+  }
+  fill($('#symptom-chips'),
+    query && !names.some((n) => n.toLowerCase() === query)
+      ? el('button', { class: 'chip add-chip', type: 'button', onclick: () => pickSymptom(clean($('#add-symptom').text.value)) }, `+ ${clean($('#add-symptom').text.value)}`)
+      : null,
+    shown.map((n) => el('button', { class: 'chip', type: 'button', onclick: () => pickSymptom(n) }, n)),
+    !query && names.length > 12
+      ? el('button', { class: 'chip more-chip', type: 'button', onclick: () => { showAllChips = !showAllChips; renderSymptomChips(); } }, showAllChips ? 'Fewer' : `More (${names.length - 12})`)
+      : null);
+}
+function pickSymptom(name) {
+  if (!name) return;
+  $('#add-symptom').text.value = '';
+  logSymptom(name);
+}
+
+function renderSymptomsToday() {
+  for (const b of document.querySelectorAll('#severity button')) b.setAttribute('aria-pressed', String(Number(b.dataset.sev) === severity));
+  renderSymptomChips();
+  const today = liveSymptoms().filter((s) => s.day === dayKey()).reverse().sort((a, b) => b.at - a.at);
+  $('#symptom-count').textContent = today.length ? String(today.length) : '';
+  fill($('#symptoms-today'), today.map((s) => el('li', { class: 'item symptom' },
+    el('span', { class: 'time' }, s.time),
+    el('div', { class: 'sym-main' },
+      el('span', { class: 'sym-name' }, s.name),
+      editableText(s.note, (v) => setSymptomNote(s.id, v), { allowEmpty: true, placeholder: 'Add a note' })),
+    el('button', { class: `sev sev${s.severity}`, type: 'button', title: 'Tap to change severity', onclick: () => cycleSeverity(s.id) }, SEVERITY[s.severity]),
+    el('button', { class: 'x', type: 'button', 'aria-label': `Remove ${s.name} at ${s.time}`, onclick: () => removeSymptom(s.id) }, '×'))));
+}
+
+let symptomFrom = null; // null = last 30 days
+const rangeFrom = () => symptomFrom || addDays(dayKey(), -29);
+const currentReport = () => symptomReport(rangeFrom(), dayKey());
+
+function renderSymptomLog() {
+  const r = currentReport();
+  $('#range-from').value = r.from;
+  $('#range-from').max = r.to;
+  for (const b of document.querySelectorAll('#range button')) {
+    b.setAttribute('aria-pressed', String(b.dataset.days === 'all'
+      ? r.from === earliestSymptomDay()
+      : addDays(dayKey(), 1 - Number(b.dataset.days)) === r.from));
+  }
+  fill($('#sym-summary'), r.summary.length
+    ? r.summary.map((x) => el('div', { class: 'stat sym-stat' },
+      el('div', { class: 'name' }, el('b', {}, x.name), el('div', { class: 'extra' }, summaryLine(x).split(' · ').slice(1).join(' · '))),
+      el('span', { class: 'num' }, `${x.times}×`, el('div', { class: 'extra' }, plural(x.days.size, 'day')))))
+    : el('p', { class: 'empty' }, 'No symptoms logged in this period.'));
+  fill($('#sym-days'), [...r.byDay].map(([day, list]) => el('section', { class: 'card day' },
+    el('h3', {}, longDate(day), dayLabel(day) ? el('small', {}, dayLabel(day)) : null),
+    el('ul', { class: 'list plain' }, list.map((s) => el('li', { class: 'item symptom' },
+      el('span', { class: 'time' }, s.time),
+      el('div', { class: 'sym-main' }, el('span', { class: 'sym-name' }, s.name), s.note ? el('span', { class: 'note' }, s.note) : null),
+      el('span', { class: `sev sev${s.severity}` }, SEVERITY[s.severity])))))));
+}
+function earliestSymptomDay() {
+  return liveSymptoms().reduce((m, s) => (s.day < m ? s.day : m), dayKey());
+}
+
+function openDoctorView() {
+  const r = currentReport();
+  fill($('#doctor-body'),
+    el('p', { class: 'doc-range' }, `${shortDate(r.from)} – ${shortDate(r.to)}`),
+    r.summary.length ? null : el('p', {}, 'No symptoms logged in this period.'),
+    r.summary.map((x) => el('div', { class: 'doc-sym' }, el('h3', {}, x.name), el('p', {}, summaryLine(x)))),
+    r.byDay.size ? el('h2', {}, 'By day') : null,
+    [...r.byDay].map(([day, list]) => el('div', { class: 'doc-day' }, el('h3', {}, longDate(day)),
+      list.map((s) => el('p', {}, entryLine(s))))));
+  $('#doctor').showModal();
+}
+
+async function shareReport() {
+  const r = currentReport();
+  const text = reportText(r);
+  const name = `symptoms-${r.from}-to-${r.to}.txt`;
+  const file = new File([text], name, { type: 'text/plain' });
+  if (navigator.canShare && navigator.canShare({ files: [file] })) {
+    try { await navigator.share({ files: [file], title: 'Symptom log' }); return; } catch (err) { if (err.name === 'AbortError') return; }
+  }
+  const url = URL.createObjectURL(file);
+  el('a', { href: url, download: name }).click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 /* ---------- drag to reorder (works with mouse and touch) ---------- */
 
 function enableDrag(list, onDrop) {
@@ -498,6 +682,7 @@ let toastUndo = null;
 function toast(text, undo) {
   $('#toast-text').textContent = text;
   toastUndo = undo;
+  $('#toast-undo').hidden = !undo;
   $('#toast').hidden = false;
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { $('#toast').hidden = true; toastUndo = null; }, 5000);
@@ -523,6 +708,24 @@ function bindAdd(form, add) {
 }
 bindAdd($('#add-task'), addTask);
 bindAdd($('#add-habit'), addHabit);
+bindAdd($('#add-symptom'), pickSymptom);
+$('#add-symptom').text.addEventListener('input', renderSymptomChips);
+for (const b of document.querySelectorAll('#severity button')) {
+  b.addEventListener('click', () => { severity = Number(b.dataset.sev); renderSymptomsToday(); });
+}
+for (const b of document.querySelectorAll('#range button')) {
+  b.addEventListener('click', () => {
+    symptomFrom = b.dataset.days === 'all' ? earliestSymptomDay() : addDays(dayKey(), 1 - Number(b.dataset.days));
+    renderSymptomLog();
+  });
+}
+$('#range-from').addEventListener('change', (e) => { if (e.target.value) { symptomFrom = e.target.value; renderSymptomLog(); } });
+$('#doctor-open').addEventListener('click', openDoctorView);
+$('#doctor-close').addEventListener('click', () => $('#doctor').close());
+$('#share-report').addEventListener('click', shareReport);
+$('#copy-report').addEventListener('click', async () => {
+  try { await navigator.clipboard.writeText(reportText(currentReport())); toast('Symptom log copied'); } catch { toast('Couldn’t copy — use Share instead'); }
+});
 
 enableDrag($('#habits'), (ids) => reorder(data.habits, ids));
 enableDrag($('#tasks'), (ids) => reorder(data.tasks, ids));
@@ -537,9 +740,8 @@ for (const btn of document.querySelectorAll('.tabs button')) {
   btn.addEventListener('click', () => {
     const view = btn.dataset.view;
     for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b === btn);
-    $('#view-today').hidden = view !== 'today';
-    $('#view-archive').hidden = view !== 'archive';
-    $('#title').textContent = view === 'today' ? 'Today' : 'Archive';
+    for (const v of ['today', 'archive', 'symptoms']) $(`#view-${v}`).hidden = view !== v;
+    $('#title').textContent = { today: 'Today', archive: 'Archive', symptoms: 'Symptoms' }[view];
     scrollTo(0, 0);
   });
 }
