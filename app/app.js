@@ -83,7 +83,7 @@ function touch(item, patch) { Object.assign(item, patch, { updated: Date.now() }
 
 function addTask(text) {
   const now = Date.now();
-  data.tasks.push({ id: uid(), text, order: nextOrder(openTasks()), created: now, doneAt: null, doneDay: null, updated: now });
+  data.tasks.push({ id: uid(), text, order: openTasks().reduce((m, x) => Math.min(m, x.order), 1) - 1, created: now, doneAt: null, doneDay: null, updated: now });
   change();
 }
 function completeTask(id) {

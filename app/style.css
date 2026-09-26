@@ -222,3 +222,4 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 #doctor-body > h2 { margin: 28px 0 0; font-size: 22px; border-top: 1px solid var(--line); padding-top: 16px; }
 .doc-day h3 { margin: 16px 0 4px; font-size: 19px; }
 .doc-day p { margin: 0; font-variant-numeric: tabular-nums; }
+.add.add-top { margin: 0 0 6px; }
