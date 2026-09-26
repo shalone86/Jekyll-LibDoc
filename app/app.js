@@ -73,6 +73,24 @@ function streak(h) {
   while (doneOn(h, d)) { n++; d = addDays(d, -1); }
   return n;
 }
+function bestStreak(h) {
+  let best = 0;
+  let run = 0;
+  let prev = null;
+  for (const d of doneDays(h)) {
+    run = prev && addDays(prev, 1) === d ? run + 1 : 1;
+    best = Math.max(best, run);
+    prev = d;
+  }
+  return best;
+}
+function streakText(h) {
+  const now = streak(h);
+  const best = bestStreak(h);
+  // Like the Today screen, a single day isn't a streak yet.
+  if (best < 2) return '';
+  return now === best ? `🔥 ${now}-day streak (best)` : `${now > 1 ? `🔥 ${now}-day streak · ` : ''}best 🔥 ${best}`;
+}
 
 function change() {
   store.set('data', data);
@@ -253,7 +271,7 @@ function todoMarkdown() {
   const lines = ['# To do', '', '> Written by the Daily app. Edit your list in the app — changes made here are overwritten.', ''];
   lines.push(`## Daily · ${longDate(today)}`, '');
   for (const h of activeHabits()) {
-    lines.push(`- [${doneOn(h, today) ? 'x' : ' '}] ${h.text} — ${plural(doneDays(h).length, 'time')}, ${streak(h)}-day streak`);
+    lines.push(`- [${doneOn(h, today) ? 'x' : ' '}] ${h.text} — ${plural(doneDays(h).length, 'time')}, ${streak(h)}-day streak (best ${bestStreak(h)})`);
   }
   lines.push('', '## Tasks', '');
   for (const t of openTasks()) lines.push(`- [ ] ${t.text}`);
@@ -511,7 +529,7 @@ function renderArchive() {
     el('div', { class: 'stat' }, el('span', { class: 'name' }, 'Tasks completed'), el('span', { class: 'num' }, String(doneTasks))),
     ...allHabits.map((h) => el('div', { class: 'stat' },
       el('span', { class: 'name' }, h.text, h.retired ? el('span', { class: 'extra' }, ' (retired)') : null),
-      el('span', { class: 'extra' }, streak(h) ? `🔥 ${streak(h)}-day streak` : ''),
+      el('span', { class: 'extra' }, streakText(h)),
       el('span', { class: 'num' }, `${doneDays(h).length}×`))),
   );
 
