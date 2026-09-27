@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=6">
+  <link rel="stylesheet" href="style.css?v=7">
 </head>
 <body>
   <header class="top">
@@ -30,6 +30,7 @@
 
   <main>
     <section id="view-today">
+      <div id="dust" class="dust-list" hidden></div>
       <section class="card">
         <div class="card-head">
           <h2>Daily</h2>
@@ -77,6 +78,19 @@
       </section>
     </section>
 
+    <section id="view-albums" hidden>
+      <form id="add-album" class="add add-album">
+        <input name="text" placeholder="Add an album you’re working on" autocomplete="off" enterkeyhint="done" aria-label="New album">
+        <button type="submit" aria-label="Add album">+</button>
+      </form>
+      <p class="hint album-tip">Albums untouched for 2 weeks get a 💤 reminder on Today. To be asked “Which album?” when you check a daily habit, tap Edit on Daily, then 🎵 on that habit.</p>
+      <div id="albums"></div>
+      <section id="finished-card" class="card" hidden>
+        <div class="card-head"><h2>Finished albums</h2></div>
+        <ul id="finished" class="list plain"></ul>
+      </section>
+    </section>
+
     <section id="view-symptoms" hidden>
       <section class="card">
         <div id="range" class="seg" role="group" aria-label="Period">
@@ -120,6 +134,7 @@
 
   <nav class="tabs" aria-label="Views">
     <button type="button" data-view="today" class="active">Today</button>
+    <button type="button" data-view="albums">Albums</button>
     <button type="button" data-view="archive">Archive</button>
     <button type="button" data-view="symptoms">Symptoms</button>
   </nav>
@@ -128,6 +143,22 @@
     <span id="toast-text"></span>
     <button id="toast-undo" type="button">Undo</button>
   </div>
+
+  <dialog id="session">
+    <form id="session-form">
+      <h2 id="session-title">Which album?</h2>
+      <p id="session-sub" class="hint"></p>
+      <div id="session-albums" class="chips"></div>
+      <label><span>What did you work on? <span class="optional">(optional)</span></span>
+        <input name="note" autocomplete="off" enterkeyhint="done" placeholder="e.g. Finished “Static”">
+      </label>
+      <div class="actions">
+        <button type="button" id="session-skip" class="secondary">Skip</button>
+        <span class="spacer"></span>
+        <button type="submit" id="session-save">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <dialog id="doctor" class="doctor">
     <div class="doctor-head">
@@ -159,6 +190,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=6"></script>
+  <script src="app.js?v=7"></script>
 </body>
 </html>

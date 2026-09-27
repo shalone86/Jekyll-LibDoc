@@ -25,6 +25,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0;
@@ -223,3 +224,30 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 .doc-day h3 { margin: 16px 0 4px; font-size: 19px; }
 .doc-day p { margin: 0; font-variant-numeric: tabular-nums; }
 .add.add-top { margin: 0 0 6px; }
+
+/* Albums */
+.add-album { margin: 0 0 6px; }
+.album-tip { margin: 0 2px 12px; }
+.album-name { flex: 1; min-width: 0; }
+.album-name .text { padding: 0; display: block; }
+.album-meta { margin-bottom: 10px; }
+.dust-text { color: var(--sev2); font-weight: 600; }
+.album.dusty { border-color: color-mix(in srgb, var(--sev2) 45%, var(--line)); }
+.sessions-head { display: flex; align-items: center; justify-content: space-between; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); }
+.sessions-head h3 { margin: 0; font-size: 14px; color: var(--muted); font-weight: 600; }
+.sessions .item { min-height: 38px; }
+.sessions .time { flex: none; width: 52px; font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.sessions .text { padding: 8px 0; }
+.muted { color: var(--muted); }
+.more-link { display: block; margin: 4px 0 0; padding: 6px 0; }
+.small-btn.on, .small-btn[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); }
+.small-btn + .small-btn { margin-left: -2px; }
+.dust-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; }
+.dust {
+  text-align: left; border: 1px solid color-mix(in srgb, var(--sev2) 45%, var(--line)); background: var(--card);
+  color: var(--ink); border-radius: 12px; padding: 10px 14px; font-size: 14px;
+}
+.chip[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
+.optional { font-weight: 400; }
+#session .chips { margin: 4px 0 8px; }
+.tabs button { padding: 10px 4px; }

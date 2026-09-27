@@ -41,6 +41,9 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * tasks:  { id, text, order, created, doneAt, doneDay, updated }   doneAt set = archived
  * habits: { id, text, order, created, retired, updated, log: { 'YYYY-MM-DD': { done, at } } }
  * symptoms: { id, name, day, time, at, severity (1 mild, 2 moderate, 3 acute), note, removed, updated }
+ * albums:   { id, name, created, createdDay, finishedAt, finishedDay, updated }   steps are tasks with albumId
+ * sessions: { id, albumId, day, at, note, habitId, removed, updated }   a day spent working on an album
+ * A habit with asksAlbum set asks "Which album?" when it's checked.
  * Nothing is ever deleted, so two devices can always be merged item by item.
  */
 
@@ -51,6 +54,8 @@ function normalize(d) {
     tasks: Array.isArray(d.tasks) ? d.tasks : [],
     habits: Array.isArray(d.habits) ? d.habits.map((h) => ({ ...h, log: h.log || {} })) : [],
     symptoms: Array.isArray(d.symptoms) ? d.symptoms : [],
+    albums: Array.isArray(d.albums) ? d.albums : [],
+    sessions: Array.isArray(d.sessions) ? d.sessions : [],
   };
 }
 
@@ -60,7 +65,8 @@ let lastSyncedSha = store.get('lastSyncedSha', null);
 
 const find = (list, id) => list.find((x) => x.id === id);
 const byOrder = (a, b) => a.order - b.order;
-const openTasks = () => data.tasks.filter((t) => !t.doneAt).sort(byOrder);
+// Album steps are tasks too; the To do list only shows the ones that don't belong to an album.
+const openTasks = (albumId = null) => data.tasks.filter((t) => !t.doneAt && (t.albumId || null) === albumId).sort(byOrder);
 const activeHabits = () => data.habits.filter((h) => !h.retired).sort(byOrder);
 const nextOrder = (list) => list.reduce((m, x) => Math.max(m, x.order), 0) + 1;
 
@@ -99,9 +105,10 @@ function change() {
 }
 function touch(item, patch) { Object.assign(item, patch, { updated: Date.now() }); }
 
-function addTask(text) {
+function addTask(text, albumId = null) {
   const now = Date.now();
-  data.tasks.push({ id: uid(), text, order: openTasks().reduce((m, x) => Math.min(m, x.order), 1) - 1, created: now, doneAt: null, doneDay: null, updated: now });
+  const order = openTasks(albumId).reduce((m, x) => Math.min(m, x.order), 1) - 1;
+  data.tasks.push({ id: uid(), text, albumId, order, created: now, doneAt: null, doneDay: null, updated: now });
   change();
 }
 function completeTask(id) {
@@ -111,7 +118,8 @@ function completeTask(id) {
   toast(`Archived “${t.text}”`, () => { touch(t, { doneAt: null, doneDay: null }); change(); });
 }
 function restoreTask(id) {
-  touch(find(data.tasks, id), { doneAt: null, doneDay: null, order: nextOrder(openTasks()) });
+  const t = find(data.tasks, id);
+  touch(t, { doneAt: null, doneDay: null, order: nextOrder(openTasks(t.albumId || null)) });
   change();
 }
 function addHabit(text) {
@@ -121,8 +129,14 @@ function addHabit(text) {
 }
 function toggleHabit(id, day = dayKey()) {
   const h = find(data.habits, id);
-  h.log[day] = { done: !doneOn(h, day), at: Date.now() };
+  const done = !doneOn(h, day);
+  h.log[day] = { done, at: Date.now() };
+  if (!done) {
+    // Unchecking takes back the album session that check logged.
+    for (const x of data.sessions) if (x.habitId === id && x.day === day && !x.removed) touch(x, { removed: true });
+  }
   change();
+  if (done && h.asksAlbum && activeAlbums().length) openSessionDialog({ habitId: id, day });
 }
 function setRetired(id, retired) {
   const h = find(data.habits, id);
@@ -134,6 +148,59 @@ function rename(list, id, text) { touch(find(list, id), { text }); change(); }
 function reorder(list, ids) {
   ids.forEach((id, i) => { const x = find(list, id); if (x && x.order !== i + 1) touch(x, { order: i + 1 }); });
   change();
+}
+
+/* ---------- albums ---------- */
+
+const DUST_DAYS = 14;
+const activeAlbums = () => data.albums.filter((a) => !a.finishedAt).sort((a, b) => a.created - b.created);
+const albumSessions = (id) => data.sessions.filter((x) => x.albumId === id && !x.removed).sort((a, b) => b.at - a.at);
+const albumName = (id) => (find(data.albums, id) || { name: 'Album' }).name;
+const daysBetween = (a, b) => Math.round((parseDay(b) - parseDay(a)) / 864e5);
+const agoText = (n) => (n <= 0 ? 'today' : n === 1 ? 'yesterday' : `${n} days ago`);
+
+// The last day anything happened on an album: a session, or one of its steps checked off.
+function lastWorked(a) {
+  let last = null;
+  for (const x of albumSessions(a.id)) if (!last || x.day > last) last = x.day;
+  for (const t of data.tasks) if (t.albumId === a.id && t.doneDay && (!last || t.doneDay > last)) last = t.doneDay;
+  return last;
+}
+function dustDays(a) {
+  const since = lastWorked(a) || a.createdDay || dayKey(new Date(a.created));
+  const n = daysBetween(since, dayKey());
+  return n >= DUST_DAYS ? n : 0;
+}
+
+function addAlbum(name) {
+  const now = Date.now();
+  data.albums.push({ id: uid(), name, created: now, createdDay: dayKey(), finishedAt: null, finishedDay: null, updated: now });
+  // First album: if there's an obvious song habit, have it ask which album from now on.
+  if (!data.habits.some((h) => h.asksAlbum)) {
+    const songs = activeHabits().filter((h) => /song|music|album|track|beat/i.test(h.text));
+    if (songs.length === 1) {
+      touch(songs[0], { asksAlbum: true });
+      toast(`Checking “${songs[0].text}” will now ask which album`);
+    }
+  }
+  change();
+}
+function setAlbumFinished(id, finished) {
+  const a = find(data.albums, id);
+  touch(a, finished ? { finishedAt: Date.now(), finishedDay: dayKey() } : { finishedAt: null, finishedDay: null });
+  change();
+  if (finished) toast(`“${a.name}” moved to finished albums 🎉`, () => setAlbumFinished(id, false));
+}
+function logSession(albumId, day, note, habitId) {
+  const now = Date.now();
+  data.sessions.push({ id: uid(), albumId, day, at: now, note, habitId: habitId || null, removed: false, updated: now });
+  change();
+}
+function removeSession(id) {
+  const x = find(data.sessions, id);
+  touch(x, { removed: true });
+  change();
+  toast('Session removed', () => { touch(x, { removed: false }); change(); });
 }
 
 /* ---------- symptoms ---------- */
@@ -237,6 +304,8 @@ function mergeData(local, remote) {
       return { ...newer(x, y), log };
     }),
     symptoms: mergeById(local.symptoms, remote.symptoms, newer),
+    albums: mergeById(local.albums, remote.albums, newer),
+    sessions: mergeById(local.sessions, remote.sessions, newer),
   };
 }
 
@@ -244,13 +313,17 @@ function mergeData(local, remote) {
 
 function archiveByDay() {
   const days = new Map();
-  const get = (d) => days.get(d) || days.set(d, { habits: [], tasks: [] }).get(d);
+  const get = (d) => days.get(d) || days.set(d, { habits: [], tasks: [], sessions: [] }).get(d);
   for (const h of [...data.habits].sort(byOrder)) for (const d of doneDays(h)) get(d).habits.push(h);
   for (const t of data.tasks.filter((t) => t.doneAt).sort((a, b) => a.doneAt - b.doneAt)) get(t.doneDay).tasks.push(t);
+  for (const x of data.sessions.filter((x) => !x.removed).sort((a, b) => a.at - b.at)) get(x.day).sessions.push(x);
   return new Map([...days].sort((a, b) => b[0].localeCompare(a[0])));
 }
 
-function archiveMarkdown(day, { habits, tasks }) {
+const taskLabel = (t) => (t.albumId ? `${t.text} (${albumName(t.albumId)})` : t.text);
+const sessionLine = (x) => `🎵 ${albumName(x.albumId)}${x.note ? ` – ${x.note}` : ''}`;
+
+function archiveMarkdown(day, { habits, tasks, sessions }) {
   const lines = [`# ${longDate(day)}`, ''];
   if (habits.length) {
     lines.push('## Daily', '');
@@ -259,7 +332,12 @@ function archiveMarkdown(day, { habits, tasks }) {
   }
   if (tasks.length) {
     lines.push('## Tasks', '');
-    for (const t of tasks) lines.push(`- [x] ${t.text}`);
+    for (const t of tasks) lines.push(`- [x] ${taskLabel(t)}`);
+    lines.push('');
+  }
+  if (sessions.length) {
+    lines.push('## Albums', '');
+    for (const x of sessions) lines.push(`- ${sessionLine(x)}`);
     lines.push('');
   }
   return lines.join('\n');
@@ -293,7 +371,23 @@ function buildFiles() {
   for (const [day, list] of byDay) {
     files[repoPath(`Symptoms/${day}.md`)] = [`# Symptoms · ${longDate(day)}`, '', ...list.map((s) => `- ${entryLine(s)}`), ''].join('\n');
   }
+  for (const a of data.albums) files[repoPath(`Albums/${fileSafe(a.name)}.md`)] = albumMarkdown(a);
   return files;
+}
+
+const fileSafe = (name) => name.replace(/[\\/:*?"<>|#^[\]]/g, '-').trim() || 'Album';
+
+function albumMarkdown(a) {
+  const sessions = albumSessions(a.id);
+  const lines = [`# ${a.name}`, ''];
+  lines.push(a.finishedDay ? `Finished ${longDate(a.finishedDay)}.` : `Started ${longDate(a.createdDay || dayKey(new Date(a.created)))}.`, '');
+  lines.push('## Steps', '');
+  for (const t of openTasks(a.id)) lines.push(`- [ ] ${t.text}`);
+  for (const t of data.tasks.filter((t) => t.albumId === a.id && t.doneAt).sort((x, y) => y.doneAt - x.doneAt)) lines.push(`- [x] ${t.text} (${t.doneDay})`);
+  lines.push('', `## Sessions (${sessions.length})`, '');
+  for (const x of sessions) lines.push(`- ${x.day}${x.note ? ` – ${x.note}` : ''}`);
+  lines.push('');
+  return lines.join('\n');
 }
 
 /* ---------- GitHub sync ---------- */
@@ -379,9 +473,11 @@ async function syncOnce() {
   for (const [path, content] of Object.entries(files)) {
     if (remote.get(path) !== await gitBlobSha(content)) changes.push({ path, mode: '100644', type: 'blob', content });
   }
-  const generatedDirs = [repoPath('Archive/'), repoPath('Symptoms/')];
+  const datedDirs = [repoPath('Archive/'), repoPath('Symptoms/')];
   for (const path of remote.keys()) {
-    if (generatedDirs.some((dir) => path.startsWith(dir)) && /\/\d{4}-\d\d-\d\d\.md$/.test(path) && !(path in files)) {
+    const generated = (datedDirs.some((dir) => path.startsWith(dir)) && /\/\d{4}-\d\d-\d\d\.md$/.test(path))
+      || (path.startsWith(repoPath('Albums/')) && path.endsWith('.md')); // e.g. an album that was renamed
+    if (generated && !(path in files)) {
       changes.push({ path, mode: '100644', type: 'blob', sha: null });
     }
   }
@@ -472,6 +568,8 @@ function render() {
   renderedDay = dayKey();
   $('#date').textContent = longDate(renderedDay);
   renderToday();
+  renderDust();
+  renderAlbums();
   renderSymptomsToday();
   renderArchive();
   renderSymptomLog();
@@ -494,7 +592,10 @@ function renderToday() {
       el('button', { class: 'check', type: 'button', role: 'checkbox', 'aria-checked': String(checked), 'aria-label': h.text, onclick: () => toggleHabit(h.id) }),
       editableText(h.text, (v) => rename(data.habits, h.id, v)),
       editingHabits
-        ? el('button', { class: 'small-btn', type: 'button', onclick: () => setRetired(h.id, true) }, 'Retire')
+        ? [el('button', {
+          class: `small-btn${h.asksAlbum ? ' on' : ''}`, type: 'button', 'aria-pressed': String(!!h.asksAlbum),
+          title: 'Ask which album when this is checked', onclick: () => { touch(h, { asksAlbum: !h.asksAlbum }); change(); },
+        }, '🎵'), el('button', { class: 'small-btn', type: 'button', onclick: () => setRetired(h.id, true) }, 'Retire')]
         : el('span', { class: 'meta', title: `${plural(n, 'time')} in total, ${s}-day streak` }, el('b', {}, `${n}×`), s > 1 ? ` · 🔥${s}` : ''));
   }) : [el('li', { class: 'empty' }, 'No daily habits yet.')]));
 
@@ -558,14 +659,18 @@ function renderArchive() {
   const shown = days.slice(0, archiveDays);
   fill($('#archive'), 
     ...(days.length ? [] : [el('section', { class: 'card' }, el('p', { class: 'empty' }, 'Things you finish will show up here, grouped by day.'))]),
-    ...shown.map(([day, { habits, tasks }]) => el('section', { class: 'card day' },
+    ...shown.map(([day, { habits, tasks, sessions }]) => el('section', { class: 'card day' },
       el('h3', {}, longDate(day), dayLabel(day) ? el('small', {}, dayLabel(day)) : null),
       el('ul', { class: 'list plain' },
         ...habits.map((h) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, h.text), el('span', { class: 'tag' }, `daily #${doneDays(h).indexOf(day) + 1}`))),
         ...tasks.map((t) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, t.text),
-          el('button', { class: 'small-btn', type: 'button', onclick: () => restoreTask(t.id) }, 'Restore')))))),
+          t.albumId ? el('span', { class: 'tag' }, albumName(t.albumId)) : null,
+          el('button', { class: 'small-btn', type: 'button', onclick: () => restoreTask(t.id) }, 'Restore'))),
+        ...sessions.map((x) => el('li', { class: 'item' },
+          el('span', { class: 'done-mark' }, '🎵'),
+          el('span', { class: 'text' }, albumName(x.albumId), x.note ? el('span', { class: 'note' }, ` – ${x.note}`) : null)))))),
     days.length > shown.length
       ? el('button', { class: 'more', type: 'button', onclick: () => { archiveDays += 60; renderArchive(); } }, `Show older (${days.length - shown.length} more days)`)
       : null,
@@ -668,6 +773,102 @@ async function shareReport() {
   const url = URL.createObjectURL(file);
   el('a', { href: url, download: name }).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function renderDust() {
+  const dusty = activeAlbums().map((a) => [a, dustDays(a)]).filter(([, n]) => n);
+  $('#dust').hidden = !dusty.length;
+  fill($('#dust'), dusty.map(([a, n]) => el('button', { class: 'dust', type: 'button', onclick: () => showView('albums') },
+    `💤 ${a.name} — untouched for ${n} days`)));
+}
+
+function stepRow(t) {
+  return el('li', { class: 'item', 'data-id': t.id },
+    el('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
+    el('button', {
+      class: 'check', type: 'button', role: 'checkbox', 'aria-checked': 'false', 'aria-label': t.text,
+      onclick: (e) => {
+        const li = e.currentTarget.closest('li');
+        li.classList.add('done', 'leaving');
+        setTimeout(() => completeTask(t.id), 450);
+      },
+    }),
+    editableText(t.text, (v) => rename(data.tasks, t.id, v)));
+}
+
+const openSessionLists = new Set();
+let refocusAlbum = null;
+
+function renderAlbums() {
+  let focusAfter = null;
+  const albums = activeAlbums();
+  fill($('#albums'), albums.length ? albums.map((a) => {
+    const steps = openTasks(a.id);
+    const sessions = albumSessions(a.id);
+    const last = lastWorked(a);
+    const dust = dustDays(a);
+    const showAll = openSessionLists.has(a.id);
+    const list = el('ul', { class: 'list' }, steps.map(stepRow));
+    enableDrag(list, (ids) => reorder(data.tasks, ids));
+    const form = el('form', { class: 'add add-top' },
+      el('input', { name: 'text', placeholder: 'Add a step', autocomplete: 'off', enterkeyhint: 'done', 'aria-label': `New step for ${a.name}` }),
+      el('button', { type: 'submit', 'aria-label': 'Add step' }, '+'));
+    bindAdd(form, (text) => { refocusAlbum = a.id; addTask(text, a.id); });
+    if (refocusAlbum === a.id) { refocusAlbum = null; focusAfter = form.text; }
+    return el('section', { class: `card album${dust ? ' dusty' : ''}` },
+      el('div', { class: 'card-head' },
+        el('h2', { class: 'album-name' }, editableText(a.name, (v) => { touch(a, { name: v }); change(); })),
+        el('button', { class: 'link', type: 'button', onclick: () => setAlbumFinished(a.id, true) }, 'Finished')),
+      el('p', { class: 'hint album-meta' },
+        dust ? el('b', { class: 'dust-text' }, `💤 Untouched for ${dust} days`) : last ? `Last worked on ${agoText(daysBetween(last, dayKey()))}` : 'Not started yet',
+        ` · ${plural(sessions.length, 'session')}`),
+      form,
+      list,
+      el('div', { class: 'sessions-head' },
+        el('h3', {}, 'Sessions'),
+        el('button', { class: 'small-btn', type: 'button', onclick: () => openSessionDialog({ albumId: a.id, day: dayKey() }) }, '+ Log a session')),
+      sessions.length
+        ? el('ul', { class: 'list plain sessions' }, (showAll ? sessions : sessions.slice(0, 3)).map((x) => el('li', { class: 'item' },
+          el('span', { class: 'time' }, shortDate(x.day).replace(/ \d{4}$/, '')),
+          el('span', { class: 'text' }, x.note || el('span', { class: 'muted' }, 'Worked on it')),
+          el('button', { class: 'x', type: 'button', 'aria-label': 'Remove session', onclick: () => removeSession(x.id) }, '×'))))
+        : el('p', { class: 'empty' }, 'No sessions yet.'),
+      sessions.length > 3
+        ? el('button', { class: 'link more-link', type: 'button', onclick: () => { showAll ? openSessionLists.delete(a.id) : openSessionLists.add(a.id); renderAlbums(); } },
+          showAll ? 'Show fewer' : `Show all ${sessions.length} sessions`)
+        : null);
+  }) : el('section', { class: 'card' }, el('p', { class: 'empty' }, 'Add an album you’re working on to give it its own step list and session log.')));
+
+  // Focus right away (not in a timeout) so the phone keyboard stays open for the next step.
+  if (focusAfter) focusAfter.focus();
+
+  const finished = data.albums.filter((a) => a.finishedAt).sort((a, b) => b.finishedAt - a.finishedAt);
+  $('#finished-card').hidden = !finished.length;
+  fill($('#finished'), finished.map((a) => el('li', { class: 'item' },
+    el('span', { class: 'text' }, a.name, el('span', { class: 'note' }, ` · finished ${shortDate(a.finishedDay)} · ${plural(albumSessions(a.id).length, 'session')}`)),
+    el('button', { class: 'small-btn', type: 'button', onclick: () => setAlbumFinished(a.id, false) }, 'Reopen'))));
+}
+
+let sessionContext = null;
+let sessionAlbum = null;
+
+function openSessionDialog({ habitId = null, albumId = null, day }) {
+  sessionContext = { habitId, day, fixed: !!albumId };
+  sessionAlbum = albumId;
+  const h = habitId && find(data.habits, habitId);
+  $('#session-title').textContent = albumId ? `Log a session · ${albumName(albumId)}` : 'Which album?';
+  $('#session-sub').textContent = `${h ? `${h.text} · ` : ''}${dayLabel(day) || longDate(day)}`;
+  $('#session-form').note.value = '';
+  renderSessionChoices();
+  $('#session').showModal();
+}
+function renderSessionChoices() {
+  $('#session-albums').hidden = sessionContext.fixed;
+  fill($('#session-albums'), activeAlbums().map((a) => el('button', {
+    class: 'chip', type: 'button', 'aria-pressed': String(a.id === sessionAlbum),
+    onclick: () => { sessionAlbum = a.id; renderSessionChoices(); },
+  }, a.name)));
+  $('#session-save').disabled = !sessionAlbum;
 }
 
 /* ---------- drag to reorder (works with mouse and touch) ---------- */
@@ -778,15 +979,24 @@ document.addEventListener('focusout', (e) => {
   if (e.target.classList && e.target.classList.contains('text') && renderPending) setTimeout(render);
 });
 
-for (const btn of document.querySelectorAll('.tabs button')) {
-  btn.addEventListener('click', () => {
-    const view = btn.dataset.view;
-    for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b === btn);
-    for (const v of ['today', 'archive', 'symptoms']) $(`#view-${v}`).hidden = view !== v;
-    $('#title').textContent = { today: 'Today', archive: 'Archive', symptoms: 'Symptoms' }[view];
-    scrollTo(0, 0);
-  });
+const VIEWS = { today: 'Today', albums: 'Albums', archive: 'Archive', symptoms: 'Symptoms' };
+function showView(view) {
+  for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.view === view);
+  for (const v of Object.keys(VIEWS)) $(`#view-${v}`).hidden = view !== v;
+  $('#title').textContent = VIEWS[view];
+  scrollTo(0, 0);
 }
+for (const btn of document.querySelectorAll('.tabs button')) btn.addEventListener('click', () => showView(btn.dataset.view));
+
+bindAdd($('#add-album'), addAlbum);
+$('#session-skip').addEventListener('click', () => $('#session').close());
+$('#session-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  if (!sessionAlbum) return;
+  logSession(sessionAlbum, sessionContext.day, clean($('#session-form').note.value), sessionContext.habitId);
+  $('#session').close();
+  toast(`Logged a session on ${albumName(sessionAlbum)}`);
+});
 
 const dialog = $('#settings');
 const form = $('#settings-form');
