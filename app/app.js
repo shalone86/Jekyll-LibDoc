@@ -119,9 +119,8 @@ function addHabit(text) {
   data.habits.push({ id: uid(), text, order: nextOrder(activeHabits()), created: now, retired: false, updated: now, log: {} });
   change();
 }
-function toggleHabit(id) {
+function toggleHabit(id, day = dayKey()) {
   const h = find(data.habits, id);
-  const day = dayKey();
   h.log[day] = { done: !doneOn(h, day), at: Date.now() };
   change();
 }
@@ -522,7 +521,29 @@ function dayLabel(day) {
   return null;
 }
 
+let backfillDay = null; // null = yesterday
+
+function renderBackfill() {
+  const today = dayKey();
+  const day = backfillDay || addDays(today, -1);
+  $('#backfill-day').value = day;
+  $('#backfill-day').max = today;
+  const habits = activeHabits();
+  fill($('#backfill'), habits.length
+    ? habits.map((h) => {
+      const checked = doneOn(h, day);
+      return el('li', { class: `item habit${checked ? ' done' : ''}` },
+        el('button', {
+          class: 'check', type: 'button', role: 'checkbox', 'aria-checked': String(checked),
+          'aria-label': `${h.text} on ${longDate(day)}`, onclick: () => toggleHabit(h.id, day),
+        }),
+        el('span', { class: 'text' }, h.text));
+    })
+    : el('li', { class: 'empty' }, 'No daily habits yet.'));
+}
+
 function renderArchive() {
+  renderBackfill();
   const allHabits = [...data.habits].sort((a, b) => (a.retired - b.retired) || byOrder(a, b));
   const doneTasks = data.tasks.filter((t) => t.doneAt).length;
   fill($('#stats'), 
@@ -748,6 +769,9 @@ $('#copy-report').addEventListener('click', async () => {
 enableDrag($('#habits'), (ids) => reorder(data.habits, ids));
 enableDrag($('#tasks'), (ids) => reorder(data.tasks, ids));
 
+$('#backfill-day').addEventListener('change', (e) => {
+  if (e.target.value && e.target.value <= dayKey()) { backfillDay = e.target.value; renderBackfill(); }
+});
 $('#edit-habits').addEventListener('click', () => { editingHabits = !editingHabits; render(); });
 
 document.addEventListener('focusout', (e) => {
