@@ -1,6 +1,9 @@
 // Keeps the app opening offline. App files are fetched fresh when online and fall back to the cache;
 // GitHub API calls are never cached.
-const CACHE = 'daily-v5';
+// 'no-cache' makes every online load check with the server, so the page and its code can't come
+// from different versions (GitHub Pages otherwise lets the browser reuse files for 10 minutes).
+// When app.js or style.css change, bump CACHE and the ?v= numbers in index.html together.
+const CACHE = 'daily-v6';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
@@ -16,7 +19,7 @@ self.addEventListener('activate', (e) => {
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== 'GET' || url.origin !== location.origin) return;
-  e.respondWith(fetch(e.request)
+  e.respondWith(fetch(e.request, { cache: 'no-cache' })
     .then((res) => {
       if (res.ok) { const copy = res.clone(); caches.open(CACHE).then((c) => c.put(e.request, copy)); }
       return res;
