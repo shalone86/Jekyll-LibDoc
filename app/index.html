@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
   <header class="top">
@@ -30,6 +30,7 @@
 
   <main>
     <section id="view-today">
+      <div id="due-buys" class="dust-list" hidden></div>
       <div id="dust" class="dust-list" hidden></div>
       <section class="card">
         <div class="card-head">
@@ -113,6 +114,21 @@
       <div id="sym-days"></div>
     </section>
 
+    <section id="view-buy" hidden>
+      <section class="card">
+        <form id="add-buy" class="add add-top buy-form">
+          <input name="text" placeholder="Something to buy later" autocomplete="off" enterkeyhint="done" aria-label="Thing to buy">
+          <button type="submit" aria-label="Add">+</button>
+        </form>
+        <div class="buy-options">
+          <label>When <select id="buy-when"></select></label>
+          <label>Cost <input id="buy-cost" inputmode="decimal" placeholder="optional" autocomplete="off"></label>
+        </div>
+        <p class="hint">When its month comes, it shows up at the top of Today. Tap Later to push it back a month.</p>
+      </section>
+      <div id="buy-groups"></div>
+    </section>
+
     <section id="view-archive" hidden>
       <section class="card">
         <div class="card-head"><h2>Forgot to check a daily?</h2></div>
@@ -135,6 +151,7 @@
   <nav class="tabs" aria-label="Views">
     <button type="button" data-view="today" class="active">Today</button>
     <button type="button" data-view="albums">Albums</button>
+    <button type="button" data-view="buy">To buy<span id="buy-badge" class="badge"></span></button>
     <button type="button" data-view="archive">Archive</button>
     <button type="button" data-view="symptoms">Symptoms</button>
   </nav>
@@ -190,6 +207,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=7"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

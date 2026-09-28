@@ -8,6 +8,7 @@ A small to-do app for your phone that backs everything up to a GitHub repository
 - **Symptoms tab:** a summary and day-by-day log for any date range, with a large-text **Read to doctor** view, **Share .txt** (email, messages, …) and **Copy**.
 - **Albums tab:** one card per album you're working on, each with its own step list, a session log and a "last worked on" date. Albums untouched for 2 weeks show a 💤 reminder on Today. Finished albums move to their own list and can be reopened.
 - **Which album?** When you check a daily habit marked with 🎵 (Daily → Edit → 🎵), the app asks which album you worked on and lets you add a note. Unchecking takes that session back.
+- **To buy tab:** things to buy later, each with a *when* (someday, a month, a season, or tax time in April) and an optional cost. Items are grouped by month with cost totals. When an item's month arrives it shows as one line at the top of Today and a count on the tab; tap **Later** to push it back a month. Checking an item marks it bought and archives it.
 - **Archive:** everything you've finished, grouped by day, with totals. You can move any task back to your list.
 - Drag the `⋮⋮` handle to reorder items. Tap an item's text to edit it.
 - Works offline. Changes are saved on the device and sent to GitHub after every edit, or as soon as the phone is back online.

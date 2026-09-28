@@ -44,6 +44,8 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * albums:   { id, name, created, createdDay, finishedAt, finishedDay, updated }   steps are tasks with albumId
  * sessions: { id, albumId, day, at, note, habitId, removed, updated }   a day spent working on an album
  * A habit with asksAlbum set asks "Which album?" when it's checked.
+ * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
+ * whenLabel (e.g. 'Spring') and an optional cost.
  * Nothing is ever deleted, so two devices can always be merged item by item.
  */
 
@@ -66,7 +68,7 @@ let lastSyncedSha = store.get('lastSyncedSha', null);
 const find = (list, id) => list.find((x) => x.id === id);
 const byOrder = (a, b) => a.order - b.order;
 // Album steps are tasks too; the To do list only shows the ones that don't belong to an album.
-const openTasks = (albumId = null) => data.tasks.filter((t) => !t.doneAt && (t.albumId || null) === albumId).sort(byOrder);
+const openTasks = (albumId = null) => data.tasks.filter((t) => !t.doneAt && !t.buy && (t.albumId || null) === albumId).sort(byOrder);
 const activeHabits = () => data.habits.filter((h) => !h.retired).sort(byOrder);
 const nextOrder = (list) => list.reduce((m, x) => Math.max(m, x.order), 0) + 1;
 
@@ -115,7 +117,7 @@ function completeTask(id) {
   const t = find(data.tasks, id);
   touch(t, { doneAt: Date.now(), doneDay: dayKey() });
   change();
-  toast(`Archived “${t.text}”`, () => { touch(t, { doneAt: null, doneDay: null }); change(); });
+  toast(`${t.buy ? 'Bought' : 'Archived'} “${t.text}”`, () => { touch(t, { doneAt: null, doneDay: null }); change(); });
 }
 function restoreTask(id) {
   const t = find(data.tasks, id);
@@ -201,6 +203,52 @@ function removeSession(id) {
   touch(x, { removed: true });
   change();
   toast('Session removed', () => { touch(x, { removed: false }); change(); });
+}
+
+/* ---------- things to buy ---------- */
+
+const monthKey = (d = new Date()) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}`;
+const addMonths = (m, n) => { const [y, mo] = m.split('-').map(Number); return monthKey(new Date(y, mo - 1 + n, 1)); };
+const monthName = (m) => { const [y, mo] = m.split('-').map(Number); return `${MONTHS[mo - 1]} ${y}`; };
+// Seasons are northern-hemisphere; "tax time" is April.
+const WHEN_MONTHS = { Spring: 3, Summer: 6, Fall: 9, Winter: 12, 'Tax time': 4 };
+function nextMonthNumbered(n) {
+  const now = new Date();
+  const year = now.getMonth() + 1 <= n ? now.getFullYear() : now.getFullYear() + 1;
+  return `${year}-${pad(n)}`;
+}
+// What the "When" menu offers: a few named times, then the next 12 months.
+function whenOptions() {
+  const cur = monthKey();
+  const opts = [['someday', 'Someday'], ['m:' + cur, 'This month'], ['m:' + addMonths(cur, 1), 'Next month']];
+  for (const [label, n] of Object.entries(WHEN_MONTHS)) opts.push([`w:${label}`, `${label} (${monthName(nextMonthNumbered(n)).replace(/ \d{4}$/, '')})`]);
+  for (let i = 2; i < 13; i++) opts.push(['m:' + addMonths(cur, i), monthName(addMonths(cur, i))]);
+  return opts;
+}
+function parseWhen(value) {
+  if (value.startsWith('w:')) { const label = value.slice(2); return { dueMonth: nextMonthNumbered(WHEN_MONTHS[label]), whenLabel: label }; }
+  if (value.startsWith('m:')) return { dueMonth: value.slice(2), whenLabel: null };
+  return { dueMonth: null, whenLabel: null };
+}
+const whenText = (t) => (!t.dueMonth ? 'Someday' : t.whenLabel ? `${t.whenLabel} · ${monthName(t.dueMonth)}` : monthName(t.dueMonth));
+const buyItems = () => data.tasks.filter((t) => t.buy && !t.doneAt);
+const dueBuys = () => buyItems().filter((t) => t.dueMonth && t.dueMonth <= monthKey()).sort((a, b) => a.dueMonth.localeCompare(b.dueMonth) || byOrder(a, b));
+const money = (n) => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+function parseCost(text) {
+  const n = Number(String(text).replace(/[^0-9.]/g, ''));
+  return text && Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function addBuy(text, when, cost) {
+  const now = Date.now();
+  data.tasks.push({ id: uid(), text, buy: true, ...parseWhen(when), cost, order: now, created: now, doneAt: null, doneDay: null, updated: now });
+  change();
+}
+function snoozeBuy(id) {
+  const t = find(data.tasks, id);
+  touch(t, { dueMonth: addMonths(t.dueMonth && t.dueMonth > monthKey() ? t.dueMonth : monthKey(), 1), whenLabel: null });
+  change();
+  toast(`“${t.text}” moved to ${monthName(t.dueMonth)}`);
 }
 
 /* ---------- symptoms ---------- */
@@ -320,7 +368,7 @@ function archiveByDay() {
   return new Map([...days].sort((a, b) => b[0].localeCompare(a[0])));
 }
 
-const taskLabel = (t) => (t.albumId ? `${t.text} (${albumName(t.albumId)})` : t.text);
+const taskLabel = (t) => (t.albumId ? `${t.text} (${albumName(t.albumId)})` : t.buy ? `${t.text} (bought${t.cost ? `, ${money(t.cost)}` : ''})` : t.text);
 const sessionLine = (x) => `🎵 ${albumName(x.albumId)}${x.note ? ` – ${x.note}` : ''}`;
 
 function archiveMarkdown(day, { habits, tasks, sessions }) {
@@ -352,6 +400,11 @@ function todoMarkdown() {
   }
   lines.push('', '## Tasks', '');
   for (const t of openTasks()) lines.push(`- [ ] ${t.text}`);
+  const buys = buyItems().sort((a, b) => (a.dueMonth || '9999').localeCompare(b.dueMonth || '9999') || byOrder(a, b));
+  if (buys.length) {
+    lines.push('', '## To buy', '');
+    for (const t of buys) lines.push(`- [ ] ${t.text} — ${whenText(t)}${t.cost ? `, ${money(t.cost)}` : ''}`);
+  }
   lines.push('');
   return lines.join('\n');
 }
@@ -559,7 +612,7 @@ function editableText(text, onRename, { allowEmpty = false, placeholder = null }
 
 function render() {
   if (dragging) { renderPending = true; return; }
-  if (document.activeElement && document.activeElement.classList.contains('text')) {
+  if (document.activeElement && document.activeElement.matches('.text, .cost')) {
     // Don't yank a line out from under someone who is typing; re-render when they finish.
     renderPending = true;
     return;
@@ -569,6 +622,7 @@ function render() {
   $('#date').textContent = longDate(renderedDay);
   renderToday();
   renderDust();
+  renderBuys();
   renderAlbums();
   renderSymptomsToday();
   renderArchive();
@@ -666,7 +720,7 @@ function renderArchive() {
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, h.text), el('span', { class: 'tag' }, `daily #${doneDays(h).indexOf(day) + 1}`))),
         ...tasks.map((t) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, t.text),
-          t.albumId ? el('span', { class: 'tag' }, albumName(t.albumId)) : null,
+          t.albumId ? el('span', { class: 'tag' }, albumName(t.albumId)) : t.buy ? el('span', { class: 'tag' }, t.cost ? `bought · ${money(t.cost)}` : 'bought') : null,
           el('button', { class: 'small-btn', type: 'button', onclick: () => restoreTask(t.id) }, 'Restore'))),
         ...sessions.map((x) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '🎵'),
@@ -774,6 +828,59 @@ async function shareReport() {
   el('a', { href: url, download: name }).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+function renderBuys() {
+  const cur = monthKey();
+  const due = dueBuys();
+  // Today only gets one line, and only once something's month has come.
+  $('#due-buys').hidden = !due.length;
+  fill($('#due-buys'), due.length ? el('button', { class: 'dust due', type: 'button', onclick: () => showView('buy') },
+    `🛒 Time to buy: ${due.map((t) => t.text).join(', ')}`) : null);
+  $('#buy-badge').textContent = due.length ? String(due.length) : '';
+  $('#buy-when').replaceChildren(...whenOptions().map(([v, label]) => el('option', { value: v }, label)));
+  $('#buy-when').value = lastWhen;
+  if ($('#buy-when').value !== lastWhen) $('#buy-when').value = 'someday';
+
+  const groups = new Map();
+  const sorted = buyItems().sort((a, b) => (a.dueMonth || '9999').localeCompare(b.dueMonth || '9999') || byOrder(a, b));
+  for (const t of sorted) {
+    const key = !t.dueMonth ? 'someday' : t.dueMonth <= cur ? 'now' : t.dueMonth;
+    (groups.get(key) || groups.set(key, []).get(key)).push(t);
+  }
+  const title = (key) => (key === 'now' ? 'Now' : key === 'someday' ? 'Someday' : key === addMonths(cur, 1) ? `Next month · ${monthName(key)}` : monthName(key));
+  fill($('#buy-groups'), groups.size ? [...groups].map(([key, items]) => {
+    const total = items.reduce((sum, t) => sum + (t.cost || 0), 0);
+    return el('section', { class: `card${key === 'now' ? ' due-card' : ''}` },
+      el('div', { class: 'card-head' }, el('h2', {}, title(key)), total ? el('span', { class: 'pill' }, `≈ ${money(total)}`) : null),
+      el('ul', { class: 'list' }, items.map((t) => el('li', { class: 'item buy' },
+        el('button', {
+          class: 'check', type: 'button', role: 'checkbox', 'aria-checked': 'false', 'aria-label': `Bought ${t.text}`,
+          onclick: (e) => {
+            const li = e.currentTarget.closest('li');
+            li.classList.add('done', 'leaving');
+            setTimeout(() => completeTask(t.id), 450);
+          },
+        }),
+        el('div', { class: 'buy-main' },
+          editableText(t.text, (v) => rename(data.tasks, t.id, v)),
+          el('span', { class: 'buy-meta' },
+            whenSelect(t),
+            el('span', {
+              class: 'cost', contenteditable: 'true', inputmode: 'decimal', 'data-placeholder': '+ cost',
+              onkeydown: (e) => { if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); } },
+              onblur: (e) => { const c = parseCost(e.target.textContent); if (c !== (t.cost || null)) { touch(t, { cost: c }); change(); } else e.target.textContent = t.cost ? money(t.cost) : ''; },
+            }, t.cost ? money(t.cost) : ''))),
+        key === 'now' ? el('button', { class: 'small-btn', type: 'button', title: 'Push to next month', onclick: () => snoozeBuy(t.id) }, 'Later') : null))));
+  }) : el('section', { class: 'card' }, el('p', { class: 'empty' }, 'Nothing planned. Add things you’ll need to buy later — they’ll show up on Today when their month comes.')));
+}
+function whenSelect(t) {
+  const sel = el('select', { class: 'when-select', 'aria-label': `When to buy ${t.text}` },
+    el('option', { value: '' }, whenText(t)),
+    whenOptions().map(([v, label]) => el('option', { value: v }, label)));
+  sel.addEventListener('change', () => { if (sel.value) { touch(t, parseWhen(sel.value)); change(); } });
+  return sel;
+}
+let lastWhen = 'someday';
 
 function renderDust() {
   const dusty = activeAlbums().map((a) => [a, dustDays(a)]).filter(([, n]) => n);
@@ -976,12 +1083,15 @@ $('#backfill-day').addEventListener('change', (e) => {
 $('#edit-habits').addEventListener('click', () => { editingHabits = !editingHabits; render(); });
 
 document.addEventListener('focusout', (e) => {
-  if (e.target.classList && e.target.classList.contains('text') && renderPending) setTimeout(render);
+  if (e.target.matches && e.target.matches('.text, .cost') && renderPending) setTimeout(render);
 });
 
-const VIEWS = { today: 'Today', albums: 'Albums', archive: 'Archive', symptoms: 'Symptoms' };
+const VIEWS = { today: 'Today', albums: 'Albums', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
 function showView(view) {
-  for (const b of document.querySelectorAll('.tabs button')) b.classList.toggle('active', b.dataset.view === view);
+  for (const b of document.querySelectorAll('.tabs button')) {
+    b.classList.toggle('active', b.dataset.view === view);
+    if (b.dataset.view === view) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+  }
   for (const v of Object.keys(VIEWS)) $(`#view-${v}`).hidden = view !== v;
   $('#title').textContent = VIEWS[view];
   scrollTo(0, 0);
@@ -989,6 +1099,12 @@ function showView(view) {
 for (const btn of document.querySelectorAll('.tabs button')) btn.addEventListener('click', () => showView(btn.dataset.view));
 
 bindAdd($('#add-album'), addAlbum);
+$('#buy-when').addEventListener('change', (e) => { lastWhen = e.target.value; });
+bindAdd($('#add-buy'), (text) => {
+  lastWhen = $('#buy-when').value;
+  addBuy(text, lastWhen, parseCost($('#buy-cost').value));
+  $('#buy-cost').value = '';
+});
 $('#session-skip').addEventListener('click', () => $('#session').close());
 $('#session-form').addEventListener('submit', (e) => {
   e.preventDefault();
