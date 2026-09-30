@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=10">
 </head>
 <body>
   <header class="top">
@@ -76,6 +76,14 @@
         </form>
         <div id="symptom-chips" class="chips"></div>
         <ul id="symptoms-today" class="list"></ul>
+      </section>
+
+      <section class="card">
+        <div class="card-head">
+          <h2>Limits</h2>
+          <button id="add-limit" class="link" type="button">+ Add</button>
+        </div>
+        <div id="limits"></div>
       </section>
     </section>
 
@@ -177,6 +185,40 @@
     </form>
   </dialog>
 
+  <dialog id="limit-dialog">
+    <form id="limit-form">
+      <h2 id="limit-title">Add a limit</h2>
+      <div id="limit-templates" class="chips">
+        <button type="button" class="chip" data-fill='{"name":"Wine","unit":"oz","dose":"2","windowMax":"2","windowHours":"1","dayMax":"4"}'>🍷 Wine: 2 oz an hour, 4 oz a day</button>
+      </div>
+      <label>Name <input name="name" autocomplete="off" placeholder="e.g. Aspirin, Wine"></label>
+      <div class="row2">
+        <label>Usual amount <input name="dose" type="number" inputmode="decimal" min="0" step="any"></label>
+        <label>Unit <input name="unit" autocomplete="off" placeholder="oz, pill, mg…"></label>
+      </div>
+      <p class="rule-label">No more than</p>
+      <div class="rule-row">
+        <input name="windowMax" type="number" inputmode="decimal" min="0" step="any" aria-label="Amount per time window">
+        <span>within</span>
+        <input name="windowHours" type="number" inputmode="decimal" min="0" step="any" aria-label="Hours">
+        <span>hours</span>
+      </div>
+      <p class="rule-label">No more than</p>
+      <div class="rule-row">
+        <input name="dayMax" type="number" inputmode="decimal" min="0" step="any" aria-label="Amount per day">
+        <span>per day (resets at midnight)</span>
+      </div>
+      <p class="hint">Fill in one rule or both. For a pill you can take once every 6 hours: 1 within 6 hours.</p>
+      <p id="limit-error" class="error" hidden></p>
+      <div class="actions">
+        <button type="button" id="limit-remove" class="secondary">Remove</button>
+        <span class="spacer"></span>
+        <button type="button" id="limit-cancel" class="secondary">Cancel</button>
+        <button type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
   <dialog id="doctor" class="doctor">
     <div class="doctor-head">
       <h2>Symptom log</h2>
@@ -197,6 +239,7 @@
       </div>
       <label>Access token <input name="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
       <p class="hint">Use a fine-grained token that can only reach this one repository, with <b>Contents: Read and write</b>. It is stored only on this device.</p>
+      <p id="get-android" class="hint android-link"><a href="daily.apk" download>Get the Android app</a> — opens Daily full-screen, like any other app.</p>
       <p id="settings-error" class="error" hidden></p>
       <div class="actions">
         <button type="button" id="backup" class="secondary">Download backup</button>
@@ -207,6 +250,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=8"></script>
+  <script src="app.js?v=10"></script>
 </body>
 </html>

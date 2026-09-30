@@ -9,6 +9,7 @@ A small to-do app for your phone that backs everything up to a GitHub repository
 - **Albums tab:** one card per album you're working on, each with its own step list, a session log and a "last worked on" date. Albums untouched for 2 weeks show a 💤 reminder on Today. Finished albums move to their own list and can be reopened.
 - **Which album?** When you check a daily habit marked with 🎵 (Daily → Edit → 🎵), the app asks which album you worked on and lets you add a note. Unchecking takes that session back.
 - **To buy tab:** things to buy later, each with a *when* (someday, a month, a season, or tax time in April) and an optional cost. Items are grouped by month with cost totals. When an item's month arrives it shows as one line at the top of Today and a count on the tab; tap **Later** to push it back a month. Checking an item marks it bought and archives it.
+- **Limits** (bottom of Today): things with a maximum, like a pill you can take once every 6 hours or 2 oz of wine an hour and 4 oz a day. Each shows how much you've had against each rule and, when you're at a limit, the time you can have more. Logging past a limit needs a second tap.
 - **Archive:** everything you've finished, grouped by day, with totals. You can move any task back to your list.
 - Drag the `⋮⋮` handle to reorder items. Tap an item's text to edit it.
 - Works offline. Changes are saved on the device and sent to GitHub after every edit, or as soon as the phone is back online.
@@ -43,6 +44,18 @@ If you lose your phone, open the app on a new one and enter the same settings. E
 5. Tap the ⚙ button, enter your GitHub username, `todo-data` and the token, then tap **Save & sync**.
 
 The ⚙ settings screen also has **Download backup**, which saves a JSON copy of everything.
+
+## Android app
+
+`android/` is a tiny Android app that opens the site full-screen, with no browser bar. The built, signed APK is published with the site as `daily.apk` (Settings → **Get the Android app**). Everything the app does lives on the website, so it only needs rebuilding if `android/` changes:
+
+```
+cd android
+ANDROID_HOME=/path/to/android-sdk gradle assembleRelease
+cp app/build/outputs/apk/release/app-release.apk ../app/daily.apk
+```
+
+Bump `versionCode` in `android/app/build.gradle` when you do. The APK is signed with `android/daily.keystore`, which is kept in the repo so every rebuild installs as an update over the previous one. It's a personal signing key for a sideloaded app, not a Play Store identity.
 
 ## Running locally
 

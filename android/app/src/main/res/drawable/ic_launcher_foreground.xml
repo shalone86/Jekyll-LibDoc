@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The same checkbox mark as the web app's icon, sized for Android's adaptive-icon safe zone. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M42,32h24a10,10 0,0 1,10 10v24a10,10 0,0 1,-10 10h-24a10,10 0,0 1,-10 -10v-24a10,10 0,0 1,10 -10z"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6" />
+    <path
+        android:pathData="M43,54.4L51.1,62.4L66.5,45.6"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="6.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+</vector>

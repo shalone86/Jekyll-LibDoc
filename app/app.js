@@ -44,6 +44,8 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * albums:   { id, name, created, createdDay, finishedAt, finishedDay, updated }   steps are tasks with albumId
  * sessions: { id, albumId, day, at, note, habitId, removed, updated }   a day spent working on an album
  * A habit with asksAlbum set asks "Which album?" when it's checked.
+ * limits: { id, name, unit, dose, windowMax, windowHours, dayMax, order, retired, updated }
+ * doses:  { id, limitId, amount, at, day, time, removed, updated }   one logged amount of a limited thing
  * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
  * whenLabel (e.g. 'Spring') and an optional cost.
  * Nothing is ever deleted, so two devices can always be merged item by item.
@@ -58,6 +60,8 @@ function normalize(d) {
     symptoms: Array.isArray(d.symptoms) ? d.symptoms : [],
     albums: Array.isArray(d.albums) ? d.albums : [],
     sessions: Array.isArray(d.sessions) ? d.sessions : [],
+    limits: Array.isArray(d.limits) ? d.limits : [],
+    doses: Array.isArray(d.doses) ? d.doses : [],
   };
 }
 
@@ -251,6 +255,64 @@ function snoozeBuy(id) {
   toast(`“${t.text}” moved to ${monthName(t.dueMonth)}`);
 }
 
+/* ---------- limits (things with a maximum per hours / per day) ---------- */
+
+const HOUR = 3600e3;
+const activeLimits = () => data.limits.filter((l) => !l.retired).sort(byOrder);
+const limitDoses = (id) => data.doses.filter((x) => x.limitId === id && !x.removed).sort((a, b) => a.at - b.at);
+const amt = (n) => String(Math.round(n * 100) / 100);
+const withUnit = (n, unit) => (unit ? `${amt(n)} ${unit}` : amt(n));
+const doseLine = (x) => { const l = find(data.limits, x.limitId) || { name: 'Limit', unit: '' }; return `${l.name} ${withUnit(x.amount, l.unit)}`; };
+const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+function untilText(ms) {
+  const mins = Math.max(1, Math.ceil(ms / 60e3));
+  return mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h${mins % 60 ? ` ${mins % 60} min` : ''}`;
+}
+
+// How much is used under each rule right now, and the earliest time `amount` more would fit both rules.
+function limitStatus(l, amount = l.dose, now = Date.now()) {
+  const doses = limitDoses(l.id);
+  const out = { windowUsed: 0, dayUsed: 0, okAt: null, never: false, reason: null };
+  if (l.windowMax && l.windowHours) {
+    const from = now - l.windowHours * HOUR;
+    const recent = doses.filter((x) => x.at > from);
+    out.windowUsed = recent.reduce((sum, x) => sum + x.amount, 0);
+    if (amount > l.windowMax) out.never = true;
+    else if (out.windowUsed + amount > l.windowMax) {
+      // Wait until enough of the oldest doses in the window have aged out.
+      let excess = out.windowUsed + amount - l.windowMax;
+      for (const x of recent) {
+        excess -= x.amount;
+        if (excess <= 1e-9) { out.okAt = x.at + l.windowHours * HOUR; out.reason = 'window'; break; }
+      }
+    }
+  }
+  if (l.dayMax) {
+    const today = dayKey(new Date(now));
+    out.dayUsed = doses.filter((x) => x.day === today).reduce((sum, x) => sum + x.amount, 0);
+    if (amount > l.dayMax) out.never = true;
+    else if (out.dayUsed + amount > l.dayMax) {
+      const midnight = parseDay(addDays(today, 1)).getTime();
+      if (!out.okAt || midnight > out.okAt) { out.okAt = midnight; out.reason = 'day'; }
+    }
+  }
+  return out;
+}
+
+function logDose(l, amount) {
+  const now = new Date();
+  const x = { id: uid(), limitId: l.id, amount, at: now.getTime(), day: dayKey(now), time: nowTime(now), removed: false, updated: now.getTime() };
+  data.doses.push(x);
+  change();
+  toast(`Logged ${withUnit(amount, l.unit)} of ${l.name} at ${clock(x.at)}`, () => { touch(x, { removed: true }); change(); });
+}
+function removeDose(id) {
+  const x = find(data.doses, id);
+  touch(x, { removed: true });
+  change();
+  toast('Removed', () => { touch(x, { removed: false }); change(); });
+}
+
 /* ---------- symptoms ---------- */
 
 const SEVERITY = { 1: 'Mild', 2: 'Moderate', 3: 'Acute' };
@@ -354,6 +416,8 @@ function mergeData(local, remote) {
     symptoms: mergeById(local.symptoms, remote.symptoms, newer),
     albums: mergeById(local.albums, remote.albums, newer),
     sessions: mergeById(local.sessions, remote.sessions, newer),
+    limits: mergeById(local.limits, remote.limits, newer),
+    doses: mergeById(local.doses, remote.doses, newer),
   };
 }
 
@@ -361,17 +425,18 @@ function mergeData(local, remote) {
 
 function archiveByDay() {
   const days = new Map();
-  const get = (d) => days.get(d) || days.set(d, { habits: [], tasks: [], sessions: [] }).get(d);
+  const get = (d) => days.get(d) || days.set(d, { habits: [], tasks: [], sessions: [], doses: [] }).get(d);
   for (const h of [...data.habits].sort(byOrder)) for (const d of doneDays(h)) get(d).habits.push(h);
   for (const t of data.tasks.filter((t) => t.doneAt).sort((a, b) => a.doneAt - b.doneAt)) get(t.doneDay).tasks.push(t);
   for (const x of data.sessions.filter((x) => !x.removed).sort((a, b) => a.at - b.at)) get(x.day).sessions.push(x);
+  for (const x of data.doses.filter((x) => !x.removed).sort((a, b) => a.at - b.at)) get(x.day).doses.push(x);
   return new Map([...days].sort((a, b) => b[0].localeCompare(a[0])));
 }
 
 const taskLabel = (t) => (t.albumId ? `${t.text} (${albumName(t.albumId)})` : t.buy ? `${t.text} (bought${t.cost ? `, ${money(t.cost)}` : ''})` : t.text);
 const sessionLine = (x) => `🎵 ${albumName(x.albumId)}${x.note ? ` – ${x.note}` : ''}`;
 
-function archiveMarkdown(day, { habits, tasks, sessions }) {
+function archiveMarkdown(day, { habits, tasks, sessions, doses }) {
   const lines = [`# ${longDate(day)}`, ''];
   if (habits.length) {
     lines.push('## Daily', '');
@@ -386,6 +451,11 @@ function archiveMarkdown(day, { habits, tasks, sessions }) {
   if (sessions.length) {
     lines.push('## Albums', '');
     for (const x of sessions) lines.push(`- ${sessionLine(x)}`);
+    lines.push('');
+  }
+  if (doses.length) {
+    lines.push('## Limits', '');
+    for (const x of doses) lines.push(`- ${x.time} ${doseLine(x)}`);
     lines.push('');
   }
   return lines.join('\n');
@@ -612,7 +682,7 @@ function editableText(text, onRename, { allowEmpty = false, placeholder = null }
 
 function render() {
   if (dragging) { renderPending = true; return; }
-  if (document.activeElement && document.activeElement.matches('.text, .cost')) {
+  if (document.activeElement && document.activeElement.matches('.text, .cost, .limit-amount')) {
     // Don't yank a line out from under someone who is typing; re-render when they finish.
     renderPending = true;
     return;
@@ -625,6 +695,7 @@ function render() {
   renderBuys();
   renderAlbums();
   renderSymptomsToday();
+  renderLimits();
   renderArchive();
   renderSymptomLog();
 }
@@ -713,7 +784,7 @@ function renderArchive() {
   const shown = days.slice(0, archiveDays);
   fill($('#archive'), 
     ...(days.length ? [] : [el('section', { class: 'card' }, el('p', { class: 'empty' }, 'Things you finish will show up here, grouped by day.'))]),
-    ...shown.map(([day, { habits, tasks, sessions }]) => el('section', { class: 'card day' },
+    ...shown.map(([day, { habits, tasks, sessions, doses }]) => el('section', { class: 'card day' },
       el('h3', {}, longDate(day), dayLabel(day) ? el('small', {}, dayLabel(day)) : null),
       el('ul', { class: 'list plain' },
         ...habits.map((h) => el('li', { class: 'item' },
@@ -724,7 +795,11 @@ function renderArchive() {
           el('button', { class: 'small-btn', type: 'button', onclick: () => restoreTask(t.id) }, 'Restore'))),
         ...sessions.map((x) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '🎵'),
-          el('span', { class: 'text' }, albumName(x.albumId), x.note ? el('span', { class: 'note' }, ` – ${x.note}`) : null)))))),
+          el('span', { class: 'text' }, albumName(x.albumId), x.note ? el('span', { class: 'note' }, ` – ${x.note}`) : null))),
+        ...doses.map((x) => el('li', { class: 'item' },
+          el('span', { class: 'done-mark' }, '•'),
+          el('span', { class: 'text' }, doseLine(x)),
+          el('span', { class: 'tag' }, x.time)))))),
     days.length > shown.length
       ? el('button', { class: 'more', type: 'button', onclick: () => { archiveDays += 60; renderArchive(); } }, `Show older (${days.length - shown.length} more days)`)
       : null,
@@ -816,9 +891,13 @@ function openDoctorView() {
   $('#doctor').showModal();
 }
 
+// Inside the Android app, text goes straight to Android's share sheet.
+const androidApp = window.AndroidApp || null;
+
 async function shareReport() {
   const r = currentReport();
   const text = reportText(r);
+  if (androidApp) { androidApp.shareText('Symptom log', text); return; }
   const name = `symptoms-${r.from}-to-${r.to}.txt`;
   const file = new File([text], name, { type: 'text/plain' });
   if (navigator.canShare && navigator.canShare({ files: [file] })) {
@@ -827,6 +906,96 @@ async function shareReport() {
   const url = URL.createObjectURL(file);
   el('a', { href: url, download: name }).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let armed = null; // limit id whose Log button is waiting for a second tap to go over the limit
+
+function renderLimits() {
+  const now = Date.now();
+  const today = dayKey();
+  const limits = activeLimits();
+  fill($('#limits'), limits.length ? limits.map((l) => {
+    const st = limitStatus(l, l.dose, now);
+    const all = limitDoses(l.id);
+    const todays = all.filter((x) => x.day === today).reverse();
+    const last = all[all.length - 1];
+    let state;
+    if (st.never) state = el('span', { class: 'lim-state warn' }, 'Usual amount is over your limit');
+    else if (!st.okAt) state = el('span', { class: 'lim-state ok' }, 'OK');
+    else if (st.reason === 'day') state = el('span', { class: 'lim-state stop' }, 'Done for today');
+    else state = el('span', { class: 'lim-state wait' }, `Wait until ${clock(st.okAt)} · ${untilText(st.okAt - now)}`);
+
+    const bar = (label, used, max) => el('div', { class: 'lim-rule' },
+      el('span', { class: 'lim-label' }, label),
+      el('span', { class: 'lim-bar' }, el('span', { class: `lim-fill${used >= max ? ' full' : ''}`, style: `width:${Math.min(100, (used / max) * 100)}%` })),
+      el('span', { class: 'lim-num' }, `${amt(used)} / ${withUnit(max, l.unit)}`));
+
+    const input = el('input', { class: 'limit-amount', type: 'number', inputmode: 'decimal', min: '0', step: 'any', value: amt(l.dose), 'aria-label': `Amount of ${l.name}` });
+    const over = armed === l.id;
+    const btn = el('button', {
+      class: `lim-log${over ? ' over' : ''}`, type: 'button',
+      onclick: () => {
+        const amount = Number(input.value);
+        if (!(amount > 0)) { input.focus(); return; }
+        const s2 = limitStatus(l, amount);
+        if ((s2.okAt || s2.never) && armed !== l.id) {
+          // Over the limit: log only on a second, deliberate tap.
+          armed = l.id;
+          renderLimits();
+          setTimeout(() => { if (armed === l.id) { armed = null; renderLimits(); } }, 4000);
+          return;
+        }
+        armed = null;
+        logDose(l, amount);
+      },
+    }, over ? 'Over limit — tap again to log' : 'Log');
+
+    return el('div', { class: 'limit' },
+      el('div', { class: 'lim-head' },
+        el('b', { class: 'lim-name' }, l.name), state,
+        el('button', { class: 'link lim-edit', type: 'button', onclick: () => openLimitDialog(l.id) }, 'Edit')),
+      l.windowMax && l.windowHours ? bar(`Past ${plural(l.windowHours, 'hour')}`, st.windowUsed, l.windowMax) : null,
+      l.dayMax ? bar('Today', st.dayUsed, l.dayMax) : null,
+      el('div', { class: 'lim-logrow' }, input, l.unit ? el('span', { class: 'lim-unit' }, l.unit) : null, btn),
+      todays.length
+        ? el('div', { class: 'lim-doses' }, todays.map((x) => el('span', { class: 'lim-dose' }, `${clock(x.at)} · ${withUnit(x.amount, l.unit)}`,
+          el('button', { class: 'x', type: 'button', 'aria-label': `Remove ${withUnit(x.amount, l.unit)} at ${clock(x.at)}`, onclick: () => removeDose(x.id) }, '×'))))
+        : el('p', { class: 'hint lim-last' }, last ? `Last: ${dayLabel(last.day) ? dayLabel(last.day).toLowerCase() : shortDate(last.day)} at ${clock(last.at)}` : 'Nothing logged yet.'));
+  }) : el('p', { class: 'empty' }, 'Track things with a limit — like a pill you can take every few hours, or drinks per hour and per day. Tap + Add.'));
+}
+
+let editingLimit = null;
+function openLimitDialog(id = null) {
+  editingLimit = id;
+  const l = id ? find(data.limits, id) : null;
+  const f = $('#limit-form');
+  f.name.value = l ? l.name : '';
+  f.unit.value = l ? l.unit : '';
+  f.dose.value = l ? amt(l.dose) : '1';
+  f.windowMax.value = l && l.windowMax ? amt(l.windowMax) : '';
+  f.windowHours.value = l && l.windowHours ? amt(l.windowHours) : '';
+  f.dayMax.value = l && l.dayMax ? amt(l.dayMax) : '';
+  $('#limit-title').textContent = l ? `Edit ${l.name}` : 'Add a limit';
+  $('#limit-remove').hidden = !l;
+  $('#limit-templates').hidden = !!l;
+  $('#limit-error').hidden = true;
+  $('#limit-dialog').showModal();
+}
+function saveLimitForm() {
+  const f = $('#limit-form');
+  const num = (v) => { const n = Number(v); return v !== '' && n > 0 ? n : null; };
+  const fields = {
+    name: clean(f.name.value), unit: clean(f.unit.value), dose: num(f.dose.value) || 1,
+    windowMax: num(f.windowMax.value), windowHours: num(f.windowHours.value), dayMax: num(f.dayMax.value),
+  };
+  const err = !fields.name ? 'Give it a name.'
+    : (!!fields.windowMax !== !!fields.windowHours) ? 'For the time-window rule, fill in both the amount and the hours.'
+      : (!fields.windowMax && !fields.dayMax) ? 'Set at least one rule.' : null;
+  if (err) { $('#limit-error').textContent = err; $('#limit-error').hidden = false; return; }
+  if (editingLimit) touch(find(data.limits, editingLimit), fields);
+  else data.limits.push({ id: uid(), ...fields, order: nextOrder(activeLimits()), retired: false, updated: Date.now() });
+  $('#limit-dialog').close();
+  change();
 }
 
 function renderBuys() {
@@ -1083,7 +1252,7 @@ $('#backfill-day').addEventListener('change', (e) => {
 $('#edit-habits').addEventListener('click', () => { editingHabits = !editingHabits; render(); });
 
 document.addEventListener('focusout', (e) => {
-  if (e.target.matches && e.target.matches('.text, .cost') && renderPending) setTimeout(render);
+  if (e.target.matches && e.target.matches('.text, .cost, .limit-amount') && renderPending) setTimeout(render);
 });
 
 const VIEWS = { today: 'Today', albums: 'Albums', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
@@ -1098,7 +1267,32 @@ function showView(view) {
 }
 for (const btn of document.querySelectorAll('.tabs button')) btn.addEventListener('click', () => showView(btn.dataset.view));
 
+// Android's Back button: close an open dialog, else go back to Today, else let the app close.
+window.handleBack = () => {
+  const open = document.querySelector('dialog[open]');
+  if (open) { open.close(); return true; }
+  if ($('#view-today').hidden) { showView('today'); return true; }
+  return false;
+};
+if (androidApp) $('#get-android').hidden = true;
+
 bindAdd($('#add-album'), addAlbum);
+$('#add-limit').addEventListener('click', () => openLimitDialog());
+$('#limit-cancel').addEventListener('click', () => $('#limit-dialog').close());
+$('#limit-form').addEventListener('submit', (e) => { e.preventDefault(); saveLimitForm(); });
+$('#limit-remove').addEventListener('click', () => {
+  const l = find(data.limits, editingLimit);
+  touch(l, { retired: true });
+  $('#limit-dialog').close();
+  change();
+  toast(`Removed ${l.name} — its history stays in the archive`, () => { touch(l, { retired: false }); change(); });
+});
+for (const b of document.querySelectorAll('#limit-templates button')) {
+  b.addEventListener('click', () => {
+    const f = $('#limit-form');
+    for (const [k, v] of Object.entries(JSON.parse(b.dataset.fill))) f[k].value = v;
+  });
+}
 $('#buy-when').addEventListener('change', (e) => { lastWhen = e.target.value; });
 bindAdd($('#add-buy'), (text) => {
   lastWhen = $('#buy-when').value;
@@ -1145,13 +1339,17 @@ form.addEventListener('submit', async (e) => {
   }
 });
 $('#backup').addEventListener('click', () => {
+  if (androidApp) { androidApp.shareText(`Daily backup ${dayKey()}`, JSON.stringify(data, null, 2)); return; }
   const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   el('a', { href: url, download: `daily-backup-${dayKey()}.json` }).click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 // Daily items reset at midnight: re-render when the date changes, and pull fresh data when the app comes back.
-setInterval(() => { if (dayKey() !== renderedDay) render(); }, 30000);
+setInterval(() => {
+  if (dayKey() !== renderedDay) render();
+  else if (!document.hidden && !(document.activeElement && document.activeElement.matches('.limit-amount'))) renderLimits();
+}, 30000);
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { if (syncTimer) sync(); } else { render(); sync(); }
 });

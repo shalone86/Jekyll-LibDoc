@@ -1,0 +1,42 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'io.github.shalone86.daily'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'io.github.shalone86.daily'
+        minSdk 24
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        // A fixed key kept in the repo so every rebuild installs as an update over the last one.
+        daily {
+            storeFile file('../daily.keystore')
+            storePassword 'dailyapp'
+            keyAlias 'daily'
+            keyPassword 'dailyapp'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.daily
+        }
+    }
+
+    lint {
+        checkReleaseBuilds false
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
