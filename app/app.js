@@ -73,6 +73,11 @@ function normalize(d) {
 let data = normalize(store.get('data', null));
 let settings = { owner: '', repo: '', branch: 'main', folder: 'Todo', token: '', ...store.get('settings', {}) };
 let lastSyncedSha = store.get('lastSyncedSha', null);
+// The commit we last synced with, and whether this device has changes GitHub hasn't seen yet.
+// Together they let the once-a-minute check stop after a single small request when nothing changed.
+let lastHeadSha = store.get('lastHeadSha', null);
+let dirty = store.get('dirty', true);
+let edits = 0; // counts local changes, so edits made during a sync aren't marked as saved
 
 const find = (list, id) => list.find((x) => x.id === id);
 const byOrder = (a, b) => a.order - b.order;
@@ -114,6 +119,9 @@ function streakText(h) {
 }
 
 function change() {
+  edits++;
+  dirty = true;
+  store.set('dirty', true);
   store.set('data', data);
   render();
   scheduleSync();
@@ -752,6 +760,9 @@ async function syncOnce() {
     });
     ref = await gh(`/git/ref/heads/${branch}`);
   }
+  // Nothing new on GitHub and nothing new here: done.
+  if (ref.object.sha === lastHeadSha && !dirty) return;
+  const editsAtStart = edits;
   const head = await gh(`/git/commits/${ref.object.sha}`);
   const tree = await gh(`/git/trees/${head.tree.sha}?recursive=1`);
   const remote = new Map(tree.tree.filter((t) => t.type === 'blob').map((t) => [t.path, t.sha]));
@@ -779,6 +790,7 @@ async function syncOnce() {
     }
   }
 
+  let newHead = ref.object.sha;
   if (changes.length) {
     const newTree = await gh('/git/trees', { method: 'POST', body: JSON.stringify({ base_tree: head.tree.sha, tree: changes }) });
     const commit = await gh('/git/commits', {
@@ -786,9 +798,14 @@ async function syncOnce() {
       body: JSON.stringify({ message: `Daily: update ${dayKey()}`, tree: newTree.sha, parents: [ref.object.sha] }),
     });
     await gh(`/git/refs/heads/${branch}`, { method: 'PATCH', body: JSON.stringify({ sha: commit.sha, force: false }) });
+    newHead = commit.sha;
   }
   lastSyncedSha = await gitBlobSha(files[dataPath]);
   store.set('lastSyncedSha', lastSyncedSha);
+  lastHeadSha = newHead;
+  store.set('lastHeadSha', lastHeadSha);
+  // Edits made while this sync was running stay dirty for the next round.
+  if (edits === editsAtStart) { dirty = false; store.set('dirty', false); }
 }
 
 let syncing = false;
@@ -1680,7 +1697,7 @@ form.addEventListener('submit', async (e) => {
   next.branch = next.branch || 'main';
   const target = (s) => [s.owner, s.repo, s.branch, s.folder].join('|');
   // A different repo/folder is a fresh start for syncing: merge everything that's there.
-  if (target(next) !== target(settings)) { lastSyncedSha = null; store.set('lastSyncedSha', null); }
+  if (target(next) !== target(settings)) { lastSyncedSha = null; store.set('lastSyncedSha', null); lastHeadSha = null; store.set('lastHeadSha', null); }
   settings = next;
   store.set('settings', settings);
   $('#settings-save').disabled = true;
@@ -1709,6 +1726,9 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'hidden') { if (syncTimer) sync(); } else { render(); sync(); }
 });
 addEventListener('online', () => sync());
+// Pick up changes from your other devices while the app stays open: on focus, and once a minute.
+addEventListener('focus', () => sync());
+setInterval(() => { if (!document.hidden && !syncing) sync(); }, 60000);
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
