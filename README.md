@@ -4,9 +4,15 @@ A small to-do app for your phone that backs everything up to a GitHub repository
 
 - **Daily:** habits that reset every morning. Each check adds to that habit's total and streak.
 - **To do:** one-off tasks. When you check a task, it moves to the archive. Nothing is ever deleted.
+  - **Categories:** color-code tasks (Church, Groceries, Basic, or your own). Tap a category chip to see only those tasks; tasks you add while it's selected go into it. ✎ adds, renames or recolors categories.
+  - **⋯ on any task:** set its category, add **subtasks** (or make it a subtask of the task above), and **link a note** from the Scriptorium notes app. The 📝 link opens that note.
+  - **Links** in a task show as short, tappable links (like `vc.va.gov/…`). Tap the text next to them to edit.
+- **Jump bar:** Daily · To do · Symptoms · Limits at the top of Today, so a long list doesn't hide the rest.
 - **Symptoms today:** choose mild, moderate or acute, then tap a symptom from the list (or type a new one, which then joins the list). Log it again each time it happens. You can add a note to any entry, and they clear from the Today screen at midnight.
 - **Symptoms tab:** a summary and day-by-day log for any date range, with a large-text **Read to doctor** view, **Share .txt** (email, messages, …) and **Copy**.
-- **Albums tab:** one card per album you're working on, each with its own step list, a session log and a "last worked on" date. Albums untouched for 2 weeks show a 💤 reminder on Today. Finished albums move to their own list and can be reopened.
+- **Albums tab:** one card per album you're working on, each with its own step list, a session log and a "last worked on" date. Albums untouched for 2 weeks show a 💤 reminder on Today.
+- **Projects tab:** the same as albums, for anything that isn't music.
+- **Finished** albums and projects go straight to the Archive (with Undo), where you can reopen them.
 - **Which album?** When you check a daily habit marked with 🎵 (Daily → Edit → 🎵), the app asks which album you worked on and lets you add a note. Unchecking takes that session back.
 - **To buy tab:** things to buy later, each with a *when* (someday, a month, a season, or tax time in April) and an optional cost. Items are grouped by month with cost totals. When an item's month arrives it shows as one line at the top of Today and a count on the tab; tap **Later** to push it back a month. Checking an item marks it bought and archives it.
 - **Limits** (bottom of Today): things with a maximum, like a pill you can take once every 6 hours or 2 oz of wine an hour and 4 oz a day. Each shows how much you've had against each rule and, when you're at a limit, the time you can have more. Logging past a limit needs a second tap.
@@ -25,6 +31,7 @@ Todo/
   Archive/2026-09-24.md   what you finished that day
   Symptoms/2026-09-24.md  symptoms logged that day
   Albums/Night Drives.md  an album's steps and session log
+  Projects/Church AV.md   a project's steps and session log
 ```
 
 The `.md` files are plain Obsidian-style checklists. If your Obsidian vault is in that repository (for example through the Obsidian Git plugin), set the app's **Folder** to a folder inside the vault. The app writes those files, so edit your lists in the app rather than in Obsidian; edits made in Obsidian get overwritten.
@@ -55,7 +62,9 @@ ANDROID_HOME=/path/to/android-sdk gradle assembleRelease
 cp app/build/outputs/apk/release/app-release.apk ../app/daily.apk
 ```
 
-Bump `versionCode` in `android/app/build.gradle` when you do. The APK is signed with `android/daily.keystore`, which is kept in the repo so every rebuild installs as an update over the previous one. It's a personal signing key for a sideloaded app, not a Play Store identity.
+Bump `versionCode` in `android/app/build.gradle` when you do. `android/build-apk.sh` builds it with only the Android SDK (no Gradle downloads): `ANDROID_HOME=… android/build-apk.sh`.
+
+In the Android app, 📝 note links open the Scriptorium app when it's installed (version 1.1 or later), otherwise the browser. The APK is signed with `android/daily.keystore`, which is kept in the repo so every rebuild installs as an update over the previous one. It's a personal signing key for a sideloaded app, not a Play Store identity.
 
 ## Running locally
 

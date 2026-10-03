@@ -48,6 +48,10 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * doses:  { id, limitId, amount, at, day, time, removed, updated }   one logged amount of a limited thing
  * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
  * whenLabel (e.g. 'Spring') and an optional cost.
+ * Tasks may also have: cat (category id), parentId (subtask of another task), note ({ id, title }: a
+ * link to a note in the Scriptorium notes app).
+ * Albums have kind 'album' (music) or 'project' (anything else); both have steps and sessions.
+ * categories: { id, name, color, order, retired, updated }
  * Nothing is ever deleted, so two devices can always be merged item by item.
  */
 
@@ -62,6 +66,7 @@ function normalize(d) {
     sessions: Array.isArray(d.sessions) ? d.sessions : [],
     limits: Array.isArray(d.limits) ? d.limits : [],
     doses: Array.isArray(d.doses) ? d.doses : [],
+    categories: Array.isArray(d.categories) ? d.categories : [],
   };
 }
 
@@ -73,6 +78,10 @@ const find = (list, id) => list.find((x) => x.id === id);
 const byOrder = (a, b) => a.order - b.order;
 // Album steps are tasks too; the To do list only shows the ones that don't belong to an album.
 const openTasks = (albumId = null) => data.tasks.filter((t) => !t.doneAt && !t.buy && (t.albumId || null) === albumId).sort(byOrder);
+// Subtasks: a task whose parent is still open is drawn under that parent.
+const openParent = (t) => { const p = t.parentId && find(data.tasks, t.parentId); return p && !p.doneAt ? p : null; };
+const topTasks = (albumId = null) => openTasks(albumId).filter((t) => !openParent(t));
+const childTasks = (id) => data.tasks.filter((t) => !t.doneAt && t.parentId === id).sort(byOrder);
 const activeHabits = () => data.habits.filter((h) => !h.retired).sort(byOrder);
 const nextOrder = (list) => list.reduce((m, x) => Math.max(m, x.order), 0) + 1;
 
@@ -111,17 +120,25 @@ function change() {
 }
 function touch(item, patch) { Object.assign(item, patch, { updated: Date.now() }); }
 
-function addTask(text, albumId = null) {
+function addTask(text, albumId = null, extra = {}) {
   const now = Date.now();
-  const order = openTasks(albumId).reduce((m, x) => Math.min(m, x.order), 1) - 1;
-  data.tasks.push({ id: uid(), text, albumId, order, created: now, doneAt: null, doneDay: null, updated: now });
+  const siblings = extra.parentId ? childTasks(extra.parentId) : openTasks(albumId);
+  // New tasks go on top; new subtasks go at the bottom of their parent.
+  const order = extra.parentId ? nextOrder(siblings) : siblings.reduce((m, x) => Math.min(m, x.order), 1) - 1;
+  data.tasks.push({ id: uid(), text, albumId, order, created: now, doneAt: null, doneDay: null, updated: now, cat: null, parentId: null, ...extra });
   change();
 }
 function completeTask(id) {
   const t = find(data.tasks, id);
-  touch(t, { doneAt: Date.now(), doneDay: dayKey() });
+  const now = Date.now();
+  // Checking a task also checks off its open subtasks.
+  const done = [t];
+  const walk = (pid) => { for (const c of childTasks(pid)) { done.push(c); walk(c.id); } };
+  walk(t.id);
+  for (const x of done) touch(x, { doneAt: now, doneDay: dayKey() });
   change();
-  toast(`${t.buy ? 'Bought' : 'Archived'} “${t.text}”`, () => { touch(t, { doneAt: null, doneDay: null }); change(); });
+  const extra = done.length > 1 ? ` and ${plural(done.length - 1, 'subtask')}` : '';
+  toast(`${t.buy ? 'Bought' : 'Archived'} “${t.text}”${extra}`, () => { for (const x of done) touch(x, { doneAt: null, doneDay: null }); change(); });
 }
 function restoreTask(id) {
   const t = find(data.tasks, id);
@@ -152,16 +169,151 @@ function setRetired(id, retired) {
 }
 function rename(list, id, text) { touch(find(list, id), { text }); change(); }
 function reorder(list, ids) {
-  ids.forEach((id, i) => { const x = find(list, id); if (x && x.order !== i + 1) touch(x, { order: i + 1 }); });
+  // Reuse the moved items' own order slots so items hidden by a filter keep their places.
+  const items = ids.map((id) => find(list, id)).filter(Boolean);
+  const slots = items.map((x) => x.order).sort((a, b) => a - b);
+  items.forEach((x, i) => { if (x.order !== slots[i]) touch(x, { order: slots[i] }); });
   change();
+}
+
+/* ---------- categories (colored, like tags) ---------- */
+
+const CAT_COLORS = ['#7c5cc4', '#2f9e44', '#868e96', '#1c7ed6', '#e8590c', '#d6336c', '#0c8599', '#c79100'];
+const DEFAULT_CATS = [['cat-church', 'Church', '#7c5cc4'], ['cat-groceries', 'Groceries', '#2f9e44'], ['cat-basic', 'Basic', '#868e96']];
+const activeCats = () => data.categories.filter((c) => !c.retired).sort(byOrder);
+const catOf = (t) => (t.cat ? find(data.categories, t.cat) : null);
+let todoFilter = store.get('todoFilter', null); // category id, or null for all
+
+function seedCategories() {
+  // Fixed ids so two phones seeding at the same time merge into the same three.
+  if (data.categories.length || store.get('catsSeeded', false)) return;
+  DEFAULT_CATS.forEach(([id, name, color], i) => data.categories.push({ id, name, color, order: i + 1, retired: false, updated: 1 }));
+  store.set('catsSeeded', true);
+  store.set('data', data);
+}
+function addCategory(name) {
+  const used = new Set(activeCats().map((c) => c.color));
+  const color = CAT_COLORS.find((c) => !used.has(c)) || CAT_COLORS[data.categories.length % CAT_COLORS.length];
+  const c = { id: uid(), name, color, order: nextOrder(activeCats()), retired: false, updated: Date.now() };
+  data.categories.push(c);
+  change();
+  return c;
+}
+function setTaskCat(id, cat) {
+  const t = find(data.tasks, id);
+  touch(t, { cat });
+  for (const c of childTasks(id)) if (!c.cat) touch(c, { cat }); // subtasks follow their parent
+  change();
+}
+
+/* ---------- subtasks ---------- */
+
+// Indent: make a task a subtask of the task just above it at the same level.
+function indentTask(id) {
+  const t = find(data.tasks, id);
+  const siblings = t.parentId ? childTasks(t.parentId) : topTasks(t.albumId || null);
+  const i = siblings.findIndex((x) => x.id === id);
+  if (i <= 0) { toast('Nothing above it to go under'); return; }
+  const parent = siblings[i - 1];
+  touch(t, { parentId: parent.id, order: nextOrder(childTasks(parent.id)), cat: t.cat || parent.cat || null });
+  change();
+}
+// Outdent: move a subtask up one level, right after its old parent.
+function outdentTask(id) {
+  const t = find(data.tasks, id);
+  const parent = openParent(t);
+  if (!parent) return;
+  const siblings = parent.parentId ? childTasks(parent.parentId) : topTasks(parent.albumId || null);
+  const ids = siblings.map((x) => x.id);
+  ids.splice(ids.indexOf(parent.id) + 1, 0, id);
+  touch(t, { parentId: parent.parentId || null });
+  ids.forEach((x, i) => touch(find(data.tasks, x), { order: i + 1 }));
+  change();
+}
+
+/* ---------- links (task text) and notes (Scriptorium) ---------- */
+
+// The notes app lives next to Daily on GitHub Pages.
+const NOTES_APP = location.hostname.endsWith('github.io') ? `${location.origin}/quickstart/` : 'https://shalone86.github.io/quickstart/';
+const noteUrl = (id) => `${NOTES_APP}#/note/${encodeURIComponent(id)}`;
+const URL_RE = /\bhttps?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'’]/g;
+
+function shortUrl(u) {
+  try {
+    const url = new URL(u);
+    if (url.href.startsWith(NOTES_APP) && /#\/note\//.test(url.hash)) return '📝 note';
+    const host = url.hostname.replace(/^www\./, '');
+    const rest = (url.pathname + url.search).replace(/\/$/, '');
+    return rest ? `${host}/…` : host;
+  } catch { return u.slice(0, 30); }
+}
+
+// Task text with links turned into short, tappable links.
+function linkedText(text) {
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(URL_RE)) {
+    if (m.index > last) out.push(text.slice(last, m.index));
+    out.push(el('a', { class: 'tlink', href: m[0], target: '_blank', rel: 'noopener', title: m[0] }, shortUrl(m[0])));
+    last = m.index + m[0].length;
+  }
+  if (last < text.length) out.push(text.slice(last));
+  return out;
+}
+
+// Notes from Scriptorium: from this browser if both apps are open here (same site), else from GitHub,
+// where Scriptorium keeps Notes/.scriptorium/db.json in the same repository as Daily.
+async function scriptoriumNotes() {
+  const fromDevice = await notesFromDevice().catch(() => []);
+  if (fromDevice.length) return fromDevice;
+  if (!configured()) throw new Error('Connect GitHub in settings to see your notes here.');
+  const branch = settings.branch || 'main';
+  const res = await fetch(`https://api.github.com/repos/${settings.owner}/${settings.repo}/contents/${encodeURI(settings.notesFolder || 'Notes')}/.scriptorium/db.json?ref=${encodeURIComponent(branch)}`, {
+    headers: { Authorization: `Bearer ${settings.token}`, Accept: 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' }, cache: 'no-store',
+  });
+  if (res.status === 404) throw new Error('No notes found in this repository yet. Turn on GitHub sync in the notes app.');
+  if (!res.ok) throw new Error(`GitHub error ${res.status}`);
+  const db = await res.json();
+  return (db.records && db.records.notes || []).filter((n) => !n.deleted && !n.trashed)
+    .map((n) => ({ id: n.id, title: n.title || 'Untitled', updated: n.updated || 0 })).sort((a, b) => b.updated - a.updated);
+}
+async function notesFromDevice() {
+  if (indexedDB.databases) {
+    const dbs = await indexedDB.databases();
+    if (!dbs.some((d) => d.name === 'scriptorium')) return [];
+  }
+  const db = await new Promise((resolve, reject) => {
+    const req = indexedDB.open('scriptorium');
+    // Never create the notes app's database from here.
+    req.onupgradeneeded = () => req.transaction.abort();
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+  try {
+    if (!db.objectStoreNames.contains('notes')) return [];
+    const notes = await new Promise((resolve, reject) => {
+      const r = db.transaction('notes', 'readonly').objectStore('notes').getAll();
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    return notes.filter((n) => !n.deleted && !n.trashed).map((n) => ({ id: n.id, title: n.title || 'Untitled', updated: n.updated || 0 })).sort((a, b) => b.updated - a.updated);
+  } finally { db.close(); }
 }
 
 /* ---------- albums ---------- */
 
 const DUST_DAYS = 14;
-const activeAlbums = () => data.albums.filter((a) => !a.finishedAt).sort((a, b) => a.created - b.created);
+const kindOf = (a) => a.kind || 'album';
+const KIND = {
+  album: { one: 'album', icon: '🎵', folder: 'Albums', title: 'Albums' },
+  project: { one: 'project', icon: '🛠️', folder: 'Projects', title: 'Projects' },
+};
+const activeOf = (kind) => data.albums.filter((a) => !a.finishedAt && kindOf(a) === kind).sort((a, b) => a.created - b.created);
+const activeAlbums = () => activeOf('album');
+const activeAll = () => data.albums.filter((a) => !a.finishedAt).sort((a, b) => a.created - b.created);
 const albumSessions = (id) => data.sessions.filter((x) => x.albumId === id && !x.removed).sort((a, b) => b.at - a.at);
 const albumName = (id) => (find(data.albums, id) || { name: 'Album' }).name;
+const albumIcon = (id) => KIND[kindOf(find(data.albums, id) || {})].icon;
 const daysBetween = (a, b) => Math.round((parseDay(b) - parseDay(a)) / 864e5);
 const agoText = (n) => (n <= 0 ? 'today' : n === 1 ? 'yesterday' : `${n} days ago`);
 
@@ -178,11 +330,11 @@ function dustDays(a) {
   return n >= DUST_DAYS ? n : 0;
 }
 
-function addAlbum(name) {
+function addAlbum(name, kind = 'album') {
   const now = Date.now();
-  data.albums.push({ id: uid(), name, created: now, createdDay: dayKey(), finishedAt: null, finishedDay: null, updated: now });
+  data.albums.push({ id: uid(), name, kind, created: now, createdDay: dayKey(), finishedAt: null, finishedDay: null, updated: now });
   // First album: if there's an obvious song habit, have it ask which album from now on.
-  if (!data.habits.some((h) => h.asksAlbum)) {
+  if (kind === 'album' && !data.habits.some((h) => h.asksAlbum)) {
     const songs = activeHabits().filter((h) => /song|music|album|track|beat/i.test(h.text));
     if (songs.length === 1) {
       touch(songs[0], { asksAlbum: true });
@@ -195,7 +347,9 @@ function setAlbumFinished(id, finished) {
   const a = find(data.albums, id);
   touch(a, finished ? { finishedAt: Date.now(), finishedDay: dayKey() } : { finishedAt: null, finishedDay: null });
   change();
-  if (finished) toast(`“${a.name}” moved to finished albums 🎉`, () => setAlbumFinished(id, false));
+  // Finished albums and projects leave their tab right away; they live in the Archive.
+  if (finished) toast(`Finished “${a.name}” 🎉 — moved to the Archive`, () => setAlbumFinished(id, false));
+  else toast(`Reopened “${a.name}”`);
 }
 function logSession(albumId, day, note, habitId) {
   const now = Date.now();
@@ -418,6 +572,7 @@ function mergeData(local, remote) {
     sessions: mergeById(local.sessions, remote.sessions, newer),
     limits: mergeById(local.limits, remote.limits, newer),
     doses: mergeById(local.doses, remote.doses, newer),
+    categories: mergeById(local.categories, remote.categories, newer),
   };
 }
 
@@ -425,18 +580,19 @@ function mergeData(local, remote) {
 
 function archiveByDay() {
   const days = new Map();
-  const get = (d) => days.get(d) || days.set(d, { habits: [], tasks: [], sessions: [], doses: [] }).get(d);
+  const get = (d) => days.get(d) || days.set(d, { habits: [], tasks: [], sessions: [], doses: [], finished: [] }).get(d);
   for (const h of [...data.habits].sort(byOrder)) for (const d of doneDays(h)) get(d).habits.push(h);
   for (const t of data.tasks.filter((t) => t.doneAt).sort((a, b) => a.doneAt - b.doneAt)) get(t.doneDay).tasks.push(t);
   for (const x of data.sessions.filter((x) => !x.removed).sort((a, b) => a.at - b.at)) get(x.day).sessions.push(x);
   for (const x of data.doses.filter((x) => !x.removed).sort((a, b) => a.at - b.at)) get(x.day).doses.push(x);
+  for (const a of data.albums.filter((a) => a.finishedAt)) get(a.finishedDay).finished.push(a);
   return new Map([...days].sort((a, b) => b[0].localeCompare(a[0])));
 }
 
 const taskLabel = (t) => (t.albumId ? `${t.text} (${albumName(t.albumId)})` : t.buy ? `${t.text} (bought${t.cost ? `, ${money(t.cost)}` : ''})` : t.text);
-const sessionLine = (x) => `🎵 ${albumName(x.albumId)}${x.note ? ` – ${x.note}` : ''}`;
+const sessionLine = (x) => `${albumIcon(x.albumId)} ${albumName(x.albumId)}${x.note ? ` – ${x.note}` : ''}`;
 
-function archiveMarkdown(day, { habits, tasks, sessions, doses }) {
+function archiveMarkdown(day, { habits, tasks, sessions, doses, finished = [] }) {
   const lines = [`# ${longDate(day)}`, ''];
   if (habits.length) {
     lines.push('## Daily', '');
@@ -449,8 +605,13 @@ function archiveMarkdown(day, { habits, tasks, sessions, doses }) {
     lines.push('');
   }
   if (sessions.length) {
-    lines.push('## Albums', '');
+    lines.push('## Albums & projects', '');
     for (const x of sessions) lines.push(`- ${sessionLine(x)}`);
+    lines.push('');
+  }
+  if (finished.length) {
+    lines.push('## Finished', '');
+    for (const a of finished) lines.push(`- 🏁 ${a.name} (${KIND[kindOf(a)].one})`);
     lines.push('');
   }
   if (doses.length) {
@@ -469,7 +630,7 @@ function todoMarkdown() {
     lines.push(`- [${doneOn(h, today) ? 'x' : ' '}] ${h.text} — ${plural(doneDays(h).length, 'time')}, ${streak(h)}-day streak (best ${bestStreak(h)})`);
   }
   lines.push('', '## Tasks', '');
-  for (const t of openTasks()) lines.push(`- [ ] ${t.text}`);
+  lines.push(...taskTreeMd(topTasks()));
   const buys = buyItems().sort((a, b) => (a.dueMonth || '9999').localeCompare(b.dueMonth || '9999') || byOrder(a, b));
   if (buys.length) {
     lines.push('', '## To buy', '');
@@ -477,6 +638,19 @@ function todoMarkdown() {
   }
   lines.push('');
   return lines.join('\n');
+}
+
+// Open tasks as an Obsidian checklist: subtasks indented, category as a #tag, linked note as [[Title]].
+function taskTreeMd(list, depth = 0) {
+  const lines = [];
+  for (const t of list) {
+    const cat = catOf(t);
+    const tag = cat ? ` #${cat.name.replace(/\s+/g, '-')}` : '';
+    const note = t.note ? ` — [[${t.note.title.replace(/[[\]|#^]/g, '')}]]` : '';
+    lines.push(`${'    '.repeat(depth)}- [ ] ${t.text}${note}${tag}`);
+    lines.push(...taskTreeMd(childTasks(t.id), depth + 1));
+  }
+  return lines;
 }
 
 function repoPath(name) {
@@ -494,7 +668,7 @@ function buildFiles() {
   for (const [day, list] of byDay) {
     files[repoPath(`Symptoms/${day}.md`)] = [`# Symptoms · ${longDate(day)}`, '', ...list.map((s) => `- ${entryLine(s)}`), ''].join('\n');
   }
-  for (const a of data.albums) files[repoPath(`Albums/${fileSafe(a.name)}.md`)] = albumMarkdown(a);
+  for (const a of data.albums) files[repoPath(`${KIND[kindOf(a)].folder}/${fileSafe(a.name)}.md`)] = albumMarkdown(a);
   return files;
 }
 
@@ -505,7 +679,7 @@ function albumMarkdown(a) {
   const lines = [`# ${a.name}`, ''];
   lines.push(a.finishedDay ? `Finished ${longDate(a.finishedDay)}.` : `Started ${longDate(a.createdDay || dayKey(new Date(a.created)))}.`, '');
   lines.push('## Steps', '');
-  for (const t of openTasks(a.id)) lines.push(`- [ ] ${t.text}`);
+  lines.push(...taskTreeMd(topTasks(a.id)));
   for (const t of data.tasks.filter((t) => t.albumId === a.id && t.doneAt).sort((x, y) => y.doneAt - x.doneAt)) lines.push(`- [x] ${t.text} (${t.doneDay})`);
   lines.push('', `## Sessions (${sessions.length})`, '');
   for (const x of sessions) lines.push(`- ${x.day}${x.note ? ` – ${x.note}` : ''}`);
@@ -599,7 +773,7 @@ async function syncOnce() {
   const datedDirs = [repoPath('Archive/'), repoPath('Symptoms/')];
   for (const path of remote.keys()) {
     const generated = (datedDirs.some((dir) => path.startsWith(dir)) && /\/\d{4}-\d\d-\d\d\.md$/.test(path))
-      || (path.startsWith(repoPath('Albums/')) && path.endsWith('.md')); // e.g. an album that was renamed
+      || ((path.startsWith(repoPath('Albums/')) || path.startsWith(repoPath('Projects/'))) && path.endsWith('.md')); // e.g. a renamed album
     if (generated && !(path in files)) {
       changes.push({ path, mode: '100644', type: 'blob', sha: null });
     }
@@ -666,16 +840,41 @@ let renderPending = false;
 let editingHabits = false;
 let archiveDays = 30;
 
-function editableText(text, onRename, { allowEmpty = false, placeholder = null } = {}) {
+function editableText(text, onRename, { allowEmpty = false, placeholder = null, links = false } = {}) {
   const span = el('span', { class: 'text', contenteditable: 'true', spellcheck: 'false', enterkeyhint: 'done', 'data-placeholder': placeholder }, text);
+  // Text with web links: show short, tappable links; tapping anywhere else edits the full text.
+  const showLinks = () => {
+    span.setAttribute('contenteditable', 'false');
+    span.classList.add('has-links');
+    fill(span, linkedText(text));
+  };
+  const hasLinks = links && !!text.match(URL_RE);
+  if (hasLinks) {
+    showLinks();
+    span.tabIndex = 0;
+    span.addEventListener('click', (e) => {
+      if (e.target.closest('a') || span.isContentEditable) return;
+      span.classList.remove('has-links');
+      span.textContent = text;
+      span.setAttribute('contenteditable', 'true');
+      span.focus();
+      const r = document.createRange();
+      r.selectNodeContents(span);
+      r.collapse(false);
+      getSelection().removeAllRanges();
+      getSelection().addRange(r);
+    });
+  }
   span.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
     if (e.key === 'Escape') { span.textContent = text; span.blur(); }
   });
   span.addEventListener('blur', () => {
+    if (hasLinks && !span.isContentEditable) return;
     const value = clean(span.textContent);
     if (!value && !allowEmpty) span.textContent = text;
-    else if (value !== text) onRename(value);
+    else if (value !== text) { onRename(value); return; }
+    if (hasLinks) showLinks();
   });
   return span;
 }
@@ -693,7 +892,9 @@ function render() {
   renderToday();
   renderDust();
   renderBuys();
-  renderAlbums();
+  renderAlbums('album');
+  renderAlbums('project');
+  renderFinished();
   renderSymptomsToday();
   renderLimits();
   renderArchive();
@@ -724,9 +925,23 @@ function renderToday() {
         : el('span', { class: 'meta', title: `${plural(n, 'time')} in total, ${s}-day streak` }, el('b', {}, `${n}×`), s > 1 ? ` · 🔥${s}` : ''));
   }) : [el('li', { class: 'empty' }, 'No daily habits yet.')]));
 
-  const tasks = openTasks();
-  $('#task-count').textContent = tasks.length ? String(tasks.length) : '';
-  fill($('#tasks'), ...(tasks.length ? tasks.map((t) => el('li', { class: 'item', 'data-id': t.id },
+  const all = openTasks();
+  $('#task-count').textContent = all.length ? String(all.length) : '';
+  if (todoFilter && !activeCats().some((c) => c.id === todoFilter)) todoFilter = null;
+  renderCatChips(all);
+  const tasks = topTasks().filter((t) => !todoFilter || t.cat === todoFilter);
+  const filterName = todoFilter ? find(data.categories, todoFilter).name : null;
+  $('#add-task').text.placeholder = filterName ? `Add a ${filterName} task` : 'Add a task';
+  fill($('#tasks'), ...(tasks.length ? tasks.map((t) => taskRow(t)) : [el('li', { class: 'empty' }, filterName ? `Nothing in ${filterName}.` : 'Nothing to do. Nice.')]));
+}
+
+// One task line, with its subtasks nested underneath.
+function taskRow(t) {
+  const cat = catOf(t);
+  const kids = childTasks(t.id);
+  const sub = kids.length ? el('ul', { class: 'list sub' }, kids.map((k) => taskRow(k))) : null;
+  if (sub) enableDrag(sub, (ids) => reorder(data.tasks, ids));
+  return el('li', { class: `item task${cat ? ' has-cat' : ''}`, 'data-id': t.id, style: cat ? `--cat:${cat.color}` : null },
     el('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
     el('button', {
       class: 'check', type: 'button', role: 'checkbox', 'aria-checked': 'false', 'aria-label': t.text,
@@ -737,7 +952,27 @@ function renderToday() {
         setTimeout(() => completeTask(t.id), 450);
       },
     }),
-    editableText(t.text, (v) => rename(data.tasks, t.id, v)))) : [el('li', { class: 'empty' }, 'Nothing to do. Nice.')]));
+    el('div', { class: 'task-main' },
+      editableText(t.text, (v) => rename(data.tasks, t.id, v), { links: true }),
+      t.note ? el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener', title: 'Open in your notes' }, `📝 ${t.note.title}`) : null),
+    el('button', { class: 'more-btn', type: 'button', 'aria-label': `Options for ${t.text}`, onclick: () => openTaskDialog(t.id) }, '⋯'),
+    sub);
+}
+
+function renderCatChips(all) {
+  const count = (id) => all.filter((t) => t.cat === id).length;
+  fill($('#todo-cats'),
+    el('button', { class: 'chip cat-chip', type: 'button', 'aria-pressed': String(!todoFilter), onclick: () => setTodoFilter(null) }, 'All'),
+    activeCats().map((c) => el('button', {
+      class: 'chip cat-chip', type: 'button', style: `--cat:${c.color}`, 'aria-pressed': String(todoFilter === c.id),
+      onclick: () => setTodoFilter(todoFilter === c.id ? null : c.id),
+    }, el('span', { class: 'cat-dot' }), c.name, count(c.id) ? el('span', { class: 'cat-n' }, String(count(c.id))) : null)),
+    el('button', { class: 'chip more-chip', type: 'button', title: 'Add or edit categories', onclick: openCatDialog }, '✎'));
+}
+function setTodoFilter(id) {
+  todoFilter = id;
+  store.set('todoFilter', id);
+  renderToday();
 }
 
 function dayLabel(day) {
@@ -784,17 +1019,19 @@ function renderArchive() {
   const shown = days.slice(0, archiveDays);
   fill($('#archive'), 
     ...(days.length ? [] : [el('section', { class: 'card' }, el('p', { class: 'empty' }, 'Things you finish will show up here, grouped by day.'))]),
-    ...shown.map(([day, { habits, tasks, sessions, doses }]) => el('section', { class: 'card day' },
+    ...shown.map(([day, { habits, tasks, sessions, doses, finished }]) => el('section', { class: 'card day' },
       el('h3', {}, longDate(day), dayLabel(day) ? el('small', {}, dayLabel(day)) : null),
       el('ul', { class: 'list plain' },
         ...habits.map((h) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, h.text), el('span', { class: 'tag' }, `daily #${doneDays(h).indexOf(day) + 1}`))),
         ...tasks.map((t) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, t.text),
-          t.albumId ? el('span', { class: 'tag' }, albumName(t.albumId)) : t.buy ? el('span', { class: 'tag' }, t.cost ? `bought · ${money(t.cost)}` : 'bought') : null,
+          t.albumId ? el('span', { class: 'tag' }, albumName(t.albumId)) : catOf(t) ? el('span', { class: 'tag cat-tag', style: `--cat:${catOf(t).color}` }, catOf(t).name) : t.buy ? el('span', { class: 'tag' }, t.cost ? `bought · ${money(t.cost)}` : 'bought') : null,
           el('button', { class: 'small-btn', type: 'button', onclick: () => restoreTask(t.id) }, 'Restore'))),
+        ...finished.map((a) => el('li', { class: 'item' },
+          el('span', { class: 'done-mark' }, '🏁'), el('span', { class: 'text' }, `Finished ${a.name}`), el('span', { class: 'tag' }, KIND[kindOf(a)].one))),
         ...sessions.map((x) => el('li', { class: 'item' },
-          el('span', { class: 'done-mark' }, '🎵'),
+          el('span', { class: 'done-mark' }, albumIcon(x.albumId)),
           el('span', { class: 'text' }, albumName(x.albumId), x.note ? el('span', { class: 'note' }, ` – ${x.note}`) : null))),
         ...doses.map((x) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '•'),
@@ -1052,34 +1289,22 @@ function whenSelect(t) {
 let lastWhen = 'someday';
 
 function renderDust() {
-  const dusty = activeAlbums().map((a) => [a, dustDays(a)]).filter(([, n]) => n);
+  const dusty = activeAll().map((a) => [a, dustDays(a)]).filter(([, n]) => n);
   $('#dust').hidden = !dusty.length;
-  fill($('#dust'), dusty.map(([a, n]) => el('button', { class: 'dust', type: 'button', onclick: () => showView('albums') },
+  fill($('#dust'), dusty.map(([a, n]) => el('button', { class: 'dust', type: 'button', onclick: () => showView(kindOf(a) === 'album' ? 'albums' : 'projects') },
     `💤 ${a.name} — untouched for ${n} days`)));
 }
 
-function stepRow(t) {
-  return el('li', { class: 'item', 'data-id': t.id },
-    el('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
-    el('button', {
-      class: 'check', type: 'button', role: 'checkbox', 'aria-checked': 'false', 'aria-label': t.text,
-      onclick: (e) => {
-        const li = e.currentTarget.closest('li');
-        li.classList.add('done', 'leaving');
-        setTimeout(() => completeTask(t.id), 450);
-      },
-    }),
-    editableText(t.text, (v) => rename(data.tasks, t.id, v)));
-}
+const stepRow = (t) => taskRow(t);
 
 const openSessionLists = new Set();
 let refocusAlbum = null;
 
-function renderAlbums() {
+function renderAlbums(kind = 'album') {
   let focusAfter = null;
-  const albums = activeAlbums();
-  fill($('#albums'), albums.length ? albums.map((a) => {
-    const steps = openTasks(a.id);
+  const albums = activeOf(kind);
+  fill($(kind === 'album' ? '#albums' : '#projects'), albums.length ? albums.map((a) => {
+    const steps = topTasks(a.id);
     const sessions = albumSessions(a.id);
     const last = lastWorked(a);
     const dust = dustDays(a);
@@ -1113,14 +1338,18 @@ function renderAlbums() {
         ? el('button', { class: 'link more-link', type: 'button', onclick: () => { showAll ? openSessionLists.delete(a.id) : openSessionLists.add(a.id); renderAlbums(); } },
           showAll ? 'Show fewer' : `Show all ${sessions.length} sessions`)
         : null);
-  }) : el('section', { class: 'card' }, el('p', { class: 'empty' }, 'Add an album you’re working on to give it its own step list and session log.')));
+  }) : el('section', { class: 'card' }, el('p', { class: 'empty' }, `Add ${kind === 'album' ? 'an album' : 'a project'} you’re working on to give it its own step list and session log.`)));
 
   // Focus right away (not in a timeout) so the phone keyboard stays open for the next step.
   if (focusAfter) focusAfter.focus();
+}
 
+// Finished albums and projects live in the Archive, where they can be reopened.
+function renderFinished() {
   const finished = data.albums.filter((a) => a.finishedAt).sort((a, b) => b.finishedAt - a.finishedAt);
   $('#finished-card').hidden = !finished.length;
   fill($('#finished'), finished.map((a) => el('li', { class: 'item' },
+    el('span', { class: 'done-mark' }, KIND[kindOf(a)].icon),
     el('span', { class: 'text' }, a.name, el('span', { class: 'note' }, ` · finished ${shortDate(a.finishedDay)} · ${plural(albumSessions(a.id).length, 'session')}`)),
     el('button', { class: 'small-btn', type: 'button', onclick: () => setAlbumFinished(a.id, false) }, 'Reopen'))));
 }
@@ -1145,6 +1374,107 @@ function renderSessionChoices() {
     onclick: () => { sessionAlbum = a.id; renderSessionChoices(); },
   }, a.name)));
   $('#session-save').disabled = !sessionAlbum;
+}
+
+/* ---------- task options: category, linked note, subtasks ---------- */
+
+let taskDialogId = null;
+let notePicking = false;
+let noteList = null;
+
+function openTaskDialog(id) {
+  taskDialogId = id;
+  notePicking = false;
+  $('#task-form').sub.value = '';
+  renderTaskDialog();
+  $('#task-dialog').showModal();
+}
+function renderTaskDialog() {
+  const t = find(data.tasks, taskDialogId);
+  if (!t) return;
+  $('#task-title').textContent = t.text;
+  fill($('#task-cats'),
+    el('button', { class: 'chip cat-chip', type: 'button', 'aria-pressed': String(!t.cat), onclick: () => { setTaskCat(t.id, null); renderTaskDialog(); } }, 'None'),
+    activeCats().map((c) => el('button', {
+      class: 'chip cat-chip', type: 'button', style: `--cat:${c.color}`, 'aria-pressed': String(t.cat === c.id),
+      onclick: () => { setTaskCat(t.id, c.id); renderTaskDialog(); },
+    }, el('span', { class: 'cat-dot' }), c.name)),
+    el('button', {
+      class: 'chip more-chip', type: 'button',
+      onclick: () => { openCatDialog(); $('#cat-form').name.focus(); },
+    }, '+ New'));
+  const parent = openParent(t);
+  $('#task-outdent').hidden = !parent;
+  $('#task-where').textContent = parent ? `Subtask of “${parent.text}”` : '';
+  renderNotePicker(t);
+}
+function renderNotePicker(t) {
+  const box = $('#task-note');
+  if (t.note && !notePicking) {
+    fill(box, el('div', { class: 'note-row' },
+      el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener' }, `📝 ${t.note.title}`),
+      el('button', { class: 'small-btn', type: 'button', onclick: () => { notePicking = true; renderNotePicker(t); } }, 'Change'),
+      el('button', { class: 'small-btn', type: 'button', onclick: () => { touch(t, { note: null }); change(); renderTaskDialog(); } }, 'Remove')));
+    return;
+  }
+  if (!notePicking) {
+    fill(box, el('button', { class: 'small-btn', type: 'button', onclick: () => { notePicking = true; renderNotePicker(t); } }, '📝 Link a note…'));
+    return;
+  }
+  const input = el('input', { class: 'note-search', placeholder: 'Search your notes', autocomplete: 'off', 'aria-label': 'Search notes' });
+  const list = el('ul', { class: 'list plain note-results' }, el('li', { class: 'empty' }, 'Loading your notes…'));
+  const draw = () => {
+    if (!Array.isArray(noteList)) return;
+    const q = clean(input.value).toLowerCase();
+    const hits = noteList.filter((n) => !q || n.title.toLowerCase().includes(q)).slice(0, 30);
+    fill(list, hits.length ? hits.map((n) => el('li', { class: 'item' },
+      el('button', { class: 'note-pick', type: 'button', onclick: () => { touch(t, { note: { id: n.id, title: n.title } }); notePicking = false; change(); renderTaskDialog(); } }, `📝 ${n.title}`)))
+      : el('li', { class: 'empty' }, q ? 'No matching notes.' : 'No notes yet.'));
+  };
+  input.addEventListener('input', draw);
+  fill(box, input, list);
+  input.focus();
+  scriptoriumNotes().then((notes) => { noteList = notes; draw(); })
+    .catch((err) => fill(list, el('li', { class: 'empty' }, err.message)));
+}
+
+function openCatDialog() {
+  renderCatDialog();
+  $('#cat-dialog').showModal();
+}
+function renderCatDialog() {
+  fill($('#cat-list'), activeCats().map((c) => el('li', { class: 'item' },
+    el('button', {
+      class: 'cat-swatch', type: 'button', style: `--cat:${c.color}`, title: 'Change color', 'aria-label': `Change color of ${c.name}`,
+      onclick: () => { touch(c, { color: CAT_COLORS[(CAT_COLORS.indexOf(c.color) + 1) % CAT_COLORS.length] }); change(); renderCatDialog(); },
+    }),
+    editableText(c.name, (v) => { touch(c, { name: v }); change(); renderCatDialog(); }),
+    el('button', {
+      class: 'small-btn', type: 'button',
+      onclick: () => {
+        touch(c, { retired: true });
+        change();
+        renderCatDialog();
+        toast(`Removed ${c.name} — its tasks keep their text`, () => { touch(c, { retired: false }); change(); renderCatDialog(); });
+      },
+    }, 'Remove'))));
+}
+
+/* ---------- Today: jump to a section ---------- */
+
+function setupJumpBar() {
+  const bar = $('#jump');
+  for (const b of bar.querySelectorAll('button')) {
+    b.addEventListener('click', () => $(`#${b.dataset.target}`).scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }
+  if (!('IntersectionObserver' in window)) return;
+  const visible = new Map();
+  const io = new IntersectionObserver((entries) => {
+    for (const e of entries) visible.set(e.target.id, e.isIntersecting);
+    const first = [...bar.querySelectorAll('button')].find((b) => visible.get(b.dataset.target));
+    for (const b of bar.querySelectorAll('button')) b.classList.toggle('on', b === first);
+  }, { rootMargin: '-110px 0px -55% 0px' });
+  for (const b of bar.querySelectorAll('button')) io.observe($(`#${b.dataset.target}`));
 }
 
 /* ---------- drag to reorder (works with mouse and touch) ---------- */
@@ -1222,7 +1552,7 @@ function bindAdd(form, add) {
     form.text.focus();
   });
 }
-bindAdd($('#add-task'), addTask);
+bindAdd($('#add-task'), (text) => addTask(text, null, { cat: todoFilter }));
 bindAdd($('#add-habit'), addHabit);
 bindAdd($('#add-symptom'), pickSymptom);
 $('#add-symptom').text.addEventListener('input', renderSymptomChips);
@@ -1255,7 +1585,7 @@ document.addEventListener('focusout', (e) => {
   if (e.target.matches && e.target.matches('.text, .cost, .limit-amount') && renderPending) setTimeout(render);
 });
 
-const VIEWS = { today: 'Today', albums: 'Albums', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
+const VIEWS = { today: 'Today', albums: 'Albums', projects: 'Projects', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
 function showView(view) {
   for (const b of document.querySelectorAll('.tabs button')) {
     b.classList.toggle('active', b.dataset.view === view);
@@ -1276,7 +1606,8 @@ window.handleBack = () => {
 };
 if (androidApp) $('#get-android').hidden = true;
 
-bindAdd($('#add-album'), addAlbum);
+bindAdd($('#add-album'), (name) => addAlbum(name, 'album'));
+bindAdd($('#add-project'), (name) => addAlbum(name, 'project'));
 $('#add-limit').addEventListener('click', () => openLimitDialog());
 $('#limit-cancel').addEventListener('click', () => $('#limit-dialog').close());
 $('#limit-form').addEventListener('submit', (e) => { e.preventDefault(); saveLimitForm(); });
@@ -1300,6 +1631,30 @@ bindAdd($('#add-buy'), (text) => {
   $('#buy-cost').value = '';
 });
 $('#session-skip').addEventListener('click', () => $('#session').close());
+$('#task-close').addEventListener('click', () => $('#task-dialog').close());
+$('#task-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const text = clean($('#task-form').sub.value);
+  if (!text) return;
+  const t = find(data.tasks, taskDialogId);
+  addTask(text, t.albumId || null, { parentId: t.id, cat: t.cat || null });
+  $('#task-form').sub.value = '';
+  $('#task-form').sub.focus();
+  toast(`Added a subtask to “${t.text}”`);
+});
+$('#task-indent').addEventListener('click', () => { indentTask(taskDialogId); renderTaskDialog(); });
+$('#task-outdent').addEventListener('click', () => { outdentTask(taskDialogId); renderTaskDialog(); });
+$('#cat-close').addEventListener('click', () => $('#cat-dialog').close());
+$('#cat-dialog').addEventListener('close', () => { if ($('#task-dialog').open) renderTaskDialog(); });
+$('#cat-form').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const name = clean($('#cat-form').name.value);
+  if (!name) return;
+  addCategory(name);
+  $('#cat-form').name.value = '';
+  renderCatDialog();
+});
+setupJumpBar();
 $('#session-form').addEventListener('submit', (e) => {
   e.preventDefault();
   if (!sessionAlbum) return;
@@ -1359,5 +1714,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
 
+seedCategories();
 render();
 sync();

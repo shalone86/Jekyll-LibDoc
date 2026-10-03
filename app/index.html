@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=10">
+  <link rel="stylesheet" href="style.css?v=11">
 </head>
 <body>
   <header class="top">
@@ -30,9 +30,15 @@
 
   <main>
     <section id="view-today">
+      <nav id="jump" class="jump" aria-label="Jump to section">
+        <button type="button" data-target="sec-daily">Daily</button>
+        <button type="button" data-target="sec-todo">To do</button>
+        <button type="button" data-target="sec-symptoms">Symptoms</button>
+        <button type="button" data-target="sec-limits">Limits</button>
+      </nav>
       <div id="due-buys" class="dust-list" hidden></div>
       <div id="dust" class="dust-list" hidden></div>
-      <section class="card">
+      <section class="card" id="sec-daily">
         <div class="card-head">
           <h2>Daily</h2>
           <span id="daily-progress" class="pill"></span>
@@ -46,12 +52,13 @@
         </form>
       </section>
 
-      <section class="card">
+      <section class="card" id="sec-todo">
         <div class="card-head">
           <h2>To do</h2>
           <span id="task-count" class="pill"></span>
         </div>
-        <p class="hint">Checking a task moves it to the archive.</p>
+        <p class="hint">Checking a task moves it to the archive. Tap ⋯ for category, subtasks or a linked note.</p>
+        <div id="todo-cats" class="chips cats"></div>
         <form id="add-task" class="add add-top">
           <input name="text" placeholder="Add a task" autocomplete="off" enterkeyhint="done" aria-label="New task">
           <button type="submit" aria-label="Add task">+</button>
@@ -59,7 +66,7 @@
         <ul id="tasks" class="list"></ul>
       </section>
 
-      <section class="card">
+      <section class="card" id="sec-symptoms">
         <div class="card-head">
           <h2>Symptoms today</h2>
           <span id="symptom-count" class="pill"></span>
@@ -78,7 +85,7 @@
         <ul id="symptoms-today" class="list"></ul>
       </section>
 
-      <section class="card">
+      <section class="card" id="sec-limits">
         <div class="card-head">
           <h2>Limits</h2>
           <button id="add-limit" class="link" type="button">+ Add</button>
@@ -94,10 +101,16 @@
       </form>
       <p class="hint album-tip">Albums untouched for 2 weeks get a 💤 reminder on Today. To be asked “Which album?” when you check a daily habit, tap Edit on Daily, then 🎵 on that habit.</p>
       <div id="albums"></div>
-      <section id="finished-card" class="card" hidden>
-        <div class="card-head"><h2>Finished albums</h2></div>
-        <ul id="finished" class="list plain"></ul>
-      </section>
+      <p class="hint album-tip">Tap Finished when an album is done — it moves to the Archive, where you can reopen it.</p>
+    </section>
+
+    <section id="view-projects" hidden>
+      <form id="add-project" class="add add-album">
+        <input name="text" placeholder="Add a project you’re working on" autocomplete="off" enterkeyhint="done" aria-label="New project">
+        <button type="submit" aria-label="Add project">+</button>
+      </form>
+      <p class="hint album-tip">Each project gets its own step list (with subtasks) and a log of the days you worked on it. Untouched for 2 weeks? You'll get a 💤 reminder on Today. Finished projects move to the Archive.</p>
+      <div id="projects"></div>
     </section>
 
     <section id="view-symptoms" hidden>
@@ -148,6 +161,10 @@
         <div class="card-head"><h2>Totals</h2></div>
         <div id="stats"></div>
       </section>
+      <section id="finished-card" class="card" hidden>
+        <div class="card-head"><h2>Finished albums &amp; projects</h2></div>
+        <ul id="finished" class="list plain"></ul>
+      </section>
       <div id="archive"></div>
       <section id="retired-card" class="card" hidden>
         <div class="card-head"><h2>Retired daily habits</h2></div>
@@ -159,6 +176,7 @@
   <nav class="tabs" aria-label="Views">
     <button type="button" data-view="today" class="active">Today</button>
     <button type="button" data-view="albums">Albums</button>
+    <button type="button" data-view="projects">Projects</button>
     <button type="button" data-view="buy">To buy<span id="buy-badge" class="badge"></span></button>
     <button type="button" data-view="archive">Archive</button>
     <button type="button" data-view="symptoms">Symptoms</button>
@@ -181,6 +199,46 @@
         <button type="button" id="session-skip" class="secondary">Skip</button>
         <span class="spacer"></span>
         <button type="submit" id="session-save">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="task-dialog">
+    <form id="task-form">
+      <h2 id="task-title"></h2>
+      <p id="task-where" class="hint"></p>
+      <p class="rule-label">Category</p>
+      <div id="task-cats" class="chips cats"></div>
+      <p class="rule-label">Linked note</p>
+      <div id="task-note"></div>
+      <p class="rule-label">Subtasks</p>
+      <div class="add">
+        <input name="sub" placeholder="Add a subtask" autocomplete="off" enterkeyhint="done" aria-label="New subtask">
+        <button type="submit" aria-label="Add subtask">+</button>
+      </div>
+      <div class="row-btns">
+        <button type="button" id="task-indent" class="small-btn">→ Make it a subtask of the task above</button>
+        <button type="button" id="task-outdent" class="small-btn">← Move out a level</button>
+      </div>
+      <div class="actions">
+        <span class="spacer"></span>
+        <button type="button" id="task-close">Done</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="cat-dialog">
+    <form id="cat-form">
+      <h2>Categories</h2>
+      <p class="hint">Color-code tasks — like Church, Groceries or Basic. Tap a color to change it, a name to rename it.</p>
+      <ul id="cat-list" class="list"></ul>
+      <div class="add">
+        <input name="name" placeholder="New category" autocomplete="off" enterkeyhint="done" aria-label="New category">
+        <button type="submit" aria-label="Add category">+</button>
+      </div>
+      <div class="actions">
+        <span class="spacer"></span>
+        <button type="button" id="cat-close">Done</button>
       </div>
     </form>
   </dialog>
@@ -250,6 +308,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=10"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

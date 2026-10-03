@@ -38,12 +38,21 @@ public class MainActivity extends Activity {
                 if (HOST.equals(url.getHost()) && url.getPath() != null && url.getPath().startsWith("/Jekyll-LibDoc")) {
                     return false;
                 }
-                // Anything else (GitHub token page, links in notes…) opens in the normal browser.
+                // A link to a note opens the Scriptorium notes app if it's installed.
+                if (HOST.equals(url.getHost()) && url.getPath() != null && url.getPath().startsWith("/quickstart")) {
+                    try {
+                        Intent notes = new Intent(Intent.ACTION_VIEW, url);
+                        notes.setPackage("io.github.shalone86.scriptorium");
+                        startActivity(notes);
+                        return true;
+                    } catch (android.content.ActivityNotFoundException e) { /* not installed: use the browser */ }
+                }
+                // Anything else (GitHub token page, links in tasks…) opens in the normal browser.
                 startActivity(new Intent(Intent.ACTION_VIEW, url));
                 return true;
             }
         });
-        web.addJavascriptInterface(new Bridge(), "AndroidApp");
+        web.addJavascriptInterface(new Bridge(this), "AndroidApp");
         setContentView(web);
         if (savedInstanceState == null || web.restoreState(savedInstanceState) == null) {
             web.loadUrl(HOME);
@@ -51,17 +60,20 @@ public class MainActivity extends Activity {
     }
 
     /** Lets the page hand text (symptom logs, backups) to Android's share sheet. */
-    class Bridge {
+    static class Bridge {
+        private final MainActivity a;
+        Bridge(MainActivity activity) { a = activity; }
+
         @JavascriptInterface
         public void shareText(final String title, final String text) {
-            runOnUiThread(new Runnable() {
+            a.runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
                     Intent send = new Intent(Intent.ACTION_SEND);
                     send.setType("text/plain");
                     send.putExtra(Intent.EXTRA_SUBJECT, title);
                     send.putExtra(Intent.EXTRA_TEXT, text);
-                    startActivity(Intent.createChooser(send, title));
+                    a.startActivity(Intent.createChooser(send, title));
                 }
             });
         }
@@ -70,8 +82,8 @@ public class MainActivity extends Activity {
     @Override
     public void onBackPressed() {
         // The page closes an open dialog or returns to Today first; only then does Back leave the app.
-        web.evaluateJavascript("window.handleBack ? String(handleBack()) : 'false'", value -> {
-            if (!"\"true\"".equals(value)) finish();
+        web.evaluateJavascript("window.handleBack ? String(handleBack()) : 'false'", new android.webkit.ValueCallback<String>() {
+            @Override public void onReceiveValue(String value) { if (!"\"true\"".equals(value)) finish(); }
         });
     }
 
