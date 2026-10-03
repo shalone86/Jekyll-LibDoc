@@ -305,3 +305,52 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 .rule-row input { width: 76px; flex: none; }
 #limit-templates { margin: 6px 0 0; }
 .android-link a { color: var(--accent); font-weight: 500; }
+
+/* Jump bar (Today) */
+.jump {
+  position: sticky; top: 0; z-index: 4; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none;
+  margin: 0 -16px 12px; padding: 8px 16px; background: color-mix(in srgb, var(--bg) 92%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+}
+.jump::-webkit-scrollbar { display: none; }
+.jump button { flex: none; border: 1px solid var(--line); background: var(--card); border-radius: 999px; padding: 6px 14px; font-size: 14px; color: var(--muted); font-weight: 500; }
+.jump button.on { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+#view-today > .card { scroll-margin-top: 60px; }
+
+/* Categories */
+.cats { margin: 4px 0 8px; }
+.cat-chip { display: inline-flex; align-items: center; gap: 6px; }
+.cat-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--cat, var(--muted)); flex: none; }
+.cat-n { font-size: 12px; color: var(--muted); }
+.cat-chip[aria-pressed="true"] { background: var(--cat, var(--accent)); border-color: var(--cat, var(--accent)); color: #fff; }
+.cat-chip[aria-pressed="true"] .cat-dot { background: #fff; }
+.cat-chip[aria-pressed="true"] .cat-n { color: rgb(255 255 255 / 0.85); }
+.item.task.has-cat { box-shadow: inset 3px 0 0 var(--cat); }
+.item.task.has-cat > .grip { margin-left: 3px; }
+.cat-tag { border-color: var(--cat); color: var(--cat); }
+.cat-swatch { flex: none; width: 26px; height: 26px; border-radius: 50%; border: 2px solid var(--card); box-shadow: 0 0 0 1px var(--line); background: var(--cat); }
+#cat-list { margin: 8px 0; }
+
+/* Tasks: subtasks, links, notes, options */
+.item.task { flex-wrap: wrap; }
+.task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.task-main .text { padding: 10px 0 2px; }
+.task-main .text:last-child { padding-bottom: 10px; }
+.list.sub { flex-basis: 100%; margin-left: 28px; border-left: 2px solid var(--line); padding-left: 4px; }
+.list.sub > .item { min-height: 40px; }
+.more-btn { flex: none; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 6px 8px; border-radius: 8px; }
+.more-btn:active { background: var(--accent-soft); }
+.tlink { color: var(--accent); text-decoration: underline; text-underline-offset: 2px; word-break: break-all; }
+.text.has-links { cursor: text; }
+.note-chip {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 4px; margin: 2px 0 8px; padding: 2px 10px;
+  border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 13px; font-weight: 500; text-decoration: none;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.note-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.note-row .note-chip { margin: 0; }
+.note-search { width: 100%; }
+.note-results { max-height: 240px; overflow: auto; margin-top: 6px; }
+.note-pick { border: 0; background: none; text-align: left; width: 100%; padding: 8px 0; font-size: 15px; color: var(--ink); }
+.row-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+#task-dialog h2 { overflow-wrap: anywhere; }
