@@ -92,30 +92,62 @@ const nextOrder = (list) => list.reduce((m, x) => Math.max(m, x.order), 0) + 1;
 
 const doneOn = (h, day) => !!(h.log[day] && h.log[day].done);
 const doneDays = (h) => Object.keys(h.log).filter((d) => h.log[d].done).sort();
+
+// A habit repeats every day (the default), every week (Sunday to Saturday) or every month.
+// Checks are always logged on the day they happen; a weekly or monthly habit is "done" once
+// its period holds as many checks as it needs.
+const EVERY = { day: { one: 'day', tag: 'Daily' }, week: { one: 'week', tag: 'Weekly' }, month: { one: 'month', tag: 'Monthly' } };
+const everyOf = (h) => (h.every === 'week' || h.every === 'month' ? h.every : 'day');
+const timesOf = (h) => (everyOf(h) === 'day' ? 1 : Math.max(1, Math.round(h.times) || 1));
+const periodStart = (day, every) => (every === 'week' ? addDays(day, -parseDay(day).getDay()) : every === 'month' ? `${day.slice(0, 7)}-01` : day);
+function periodAfter(start, every, n) {
+  if (every !== 'month') return addDays(start, (every === 'week' ? 7 : 1) * n);
+  const d = parseDay(start);
+  d.setMonth(d.getMonth() + n, 1);
+  return dayKey(d);
+}
+const periodDays = (h, day) => { const e = everyOf(h); const s = periodStart(day, e); return doneDays(h).filter((d) => periodStart(d, e) === s); };
+const periodCount = (h, day) => periodDays(h, day).length;
+const doneIn = (h, day) => (everyOf(h) === 'day' ? doneOn(h, day) : periodCount(h, day) >= timesOf(h));
+// Days left in this week or month after today; used to nudge a habit that's still waiting.
+function daysLeft(every, day = dayKey()) {
+  const d = parseDay(day);
+  return every === 'week' ? 6 - d.getDay() : new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate() - d.getDate();
+}
+const isDaily = (h) => everyOf(h) === 'day';
+const dailiesDone = (day = dayKey()) => { const ds = activeHabits().filter(isDaily); return ds.length > 0 && ds.every((h) => doneOn(h, day)); };
+
 function streak(h) {
-  let d = dayKey();
-  if (!doneOn(h, d)) d = addDays(d, -1);
+  const e = everyOf(h);
+  let p = periodStart(dayKey(), e);
+  if (!doneIn(h, p)) p = periodAfter(p, e, -1);
   let n = 0;
-  while (doneOn(h, d)) { n++; d = addDays(d, -1); }
+  while (doneIn(h, p)) { n++; p = periodAfter(p, e, -1); }
   return n;
 }
 function bestStreak(h) {
+  const e = everyOf(h);
+  const need = timesOf(h);
+  const counts = new Map();
+  for (const d of doneDays(h)) { const p = periodStart(d, e); counts.set(p, (counts.get(p) || 0) + 1); }
   let best = 0;
   let run = 0;
   let prev = null;
-  for (const d of doneDays(h)) {
-    run = prev && addDays(prev, 1) === d ? run + 1 : 1;
+  for (const p of [...counts.keys()].sort()) {
+    if (counts.get(p) < need) continue;
+    run = prev && periodAfter(prev, e, 1) === p ? run + 1 : 1;
     best = Math.max(best, run);
-    prev = d;
+    prev = p;
   }
   return best;
 }
 function streakText(h) {
   const now = streak(h);
   const best = bestStreak(h);
+  const unit = EVERY[everyOf(h)].one;
   // Like the Today screen, a single day isn't a streak yet.
   if (best < 2) return '';
-  return now === best ? `🔥 ${now}-day streak (best)` : `${now > 1 ? `🔥 ${now}-day streak · ` : ''}best 🔥 ${best}`;
+  return now === best ? `🔥 ${now}-${unit} streak (best)` : `${now > 1 ? `🔥 ${now}-${unit} streak · ` : ''}best 🔥 ${best}`;
 }
 
 function change() {
@@ -153,21 +185,47 @@ function restoreTask(id) {
   touch(t, { doneAt: null, doneDay: null, order: nextOrder(openTasks(t.albumId || null)) });
   change();
 }
-function addHabit(text) {
+function addHabit(text, every = 'day') {
   const now = Date.now();
-  data.habits.push({ id: uid(), text, order: nextOrder(activeHabits()), created: now, retired: false, updated: now, log: {} });
+  data.habits.push({ id: uid(), text, every, times: 1, order: nextOrder(activeHabits()), created: now, retired: false, updated: now, log: {} });
   change();
 }
 function toggleHabit(id, day = dayKey()) {
   const h = find(data.habits, id);
-  const done = !doneOn(h, day);
-  h.log[day] = { done, at: Date.now() };
+  const e = everyOf(h);
+  const wasAllDone = dailiesDone();
+  // A weekly or monthly habit that's already complete shows as ticked for the whole period,
+  // so tapping it takes back the latest check (or the only one) whichever day that was on.
+  const undo = e !== 'day' && doneIn(h, day);
+  const days = undo ? (timesOf(h) === 1 ? periodDays(h, day) : periodDays(h, day).slice(-1)) : [day];
+  const done = undo ? false : !doneOn(h, day);
+  for (const d of days) h.log[d] = { done, at: Date.now() };
   if (!done) {
     // Unchecking takes back the album session that check logged.
-    for (const x of data.sessions) if (x.habitId === id && x.day === day && !x.removed) touch(x, { removed: true });
+    for (const d of days) for (const x of data.sessions) if (x.habitId === id && x.day === d && !x.removed) touch(x, { removed: true });
   }
   change();
   if (done && h.asksAlbum && activeAlbums().length) openSessionDialog({ habitId: id, day });
+  renderSymptomLog();
+  if (done && e === 'day' && day === dayKey() && !wasAllDone && dailiesDone()) celebrate();
+}
+
+// Confetti and a cheer, for finishing the last daily habit of the day.
+function celebrate() {
+  const pill = $('#daily-progress');
+  pill.classList.remove('pop');
+  void pill.offsetWidth;
+  pill.classList.add('pop');
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const colors = ['#2f7d5b', '#e8b04a', '#e0735f', '#5b8def', '#b66fd1', '#f06bb0'];
+  const layer = el('div', { class: 'confetti', 'aria-hidden': 'true' },
+    Array.from({ length: 70 }, (_, i) => el('i', {
+      style: `--x:${(Math.random() * 100).toFixed(1)}vw;--dx:${((Math.random() - 0.5) * 40).toFixed(1)}vw;--r:${Math.round(Math.random() * 720 - 360)}deg;`
+        + `--d:${(1.8 + Math.random() * 1.4).toFixed(2)}s;--w:${(Math.random() * 0.5).toFixed(2)}s;--c:${colors[i % colors.length]}`,
+    })),
+    el('div', { class: 'cheer' }, '🎉 All done for today!'));
+  document.body.append(layer);
+  setTimeout(() => layer.remove(), 3800);
 }
 function setRetired(id, retired) {
   const h = find(data.habits, id);
@@ -604,7 +662,7 @@ function archiveMarkdown(day, { habits, tasks, sessions, doses, finished = [] })
   const lines = [`# ${longDate(day)}`, ''];
   if (habits.length) {
     lines.push('## Daily', '');
-    for (const h of habits) lines.push(`- [x] ${h.text} (#${doneDays(h).indexOf(day) + 1})`);
+    for (const h of habits) lines.push(`- [x] ${h.text} (${isDaily(h) ? '' : `${EVERY[everyOf(h)].tag.toLowerCase()} `}#${doneDays(h).indexOf(day) + 1})`);
     lines.push('');
   }
   if (tasks.length) {
@@ -920,27 +978,57 @@ function render() {
 
 function renderToday() {
   const today = dayKey();
-  const habits = activeHabits();
-  const done = habits.filter((h) => doneOn(h, today)).length;
-  $('#daily-progress').textContent = habits.length ? `${done}/${habits.length}` : '';
+  const rank = { day: 0, week: 1, month: 2 };
+  // Daily first, then weekly, then monthly; dragging keeps the order within each.
+  const habits = activeHabits().sort((x, y) => rank[everyOf(x)] - rank[everyOf(y)] || byOrder(x, y));
+  const dailies = habits.filter(isDaily);
+  const done = dailies.filter((h) => doneOn(h, today)).length;
+  $('#daily-progress').textContent = dailies.length ? `${done}/${dailies.length}` : '';
+  $('#daily-progress').classList.toggle('all', dailies.length > 0 && done === dailies.length);
   $('#edit-habits').textContent = editingHabits ? 'Done' : 'Edit';
   $('#edit-habits').hidden = !habits.length;
 
+  const others = habits.filter((h) => !isDaily(h));
+  const line = ['week', 'month'].map((e) => {
+    const hs = others.filter((h) => everyOf(h) === e);
+    return hs.length ? `This ${e} ${hs.filter((h) => doneIn(h, today)).length}/${hs.length}` : null;
+  }).filter(Boolean).join(' · ');
+  $('#period-progress').textContent = line;
+  $('#period-progress').hidden = !line;
+
   fill($('#habits'), ...(habits.length ? habits.map((h) => {
-    const checked = doneOn(h, today);
+    const e = everyOf(h);
+    const need = timesOf(h);
+    const complete = doneIn(h, today);
+    const cnt = e === 'day' ? 0 : periodCount(h, today);
+    // "Part": ticked today, but a several-times habit still needs more checks this period.
+    const part = !complete && e !== 'day' && doneOn(h, today);
+    const due = !complete && e !== 'day' && daysLeft(e) <= (e === 'week' ? 1 : 2);
     const n = doneDays(h).length;
     const s = streak(h);
-    return el('li', { class: `item habit${checked ? ' done' : ''}`, 'data-id': h.id },
+    const unit = EVERY[e].one;
+    return el('li', { class: `item habit${complete ? ' done' : ''}${part ? ' part' : ''}${due ? ' due' : ''}${editingHabits ? ' editing' : ''}`, 'data-id': h.id },
       el('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
-      el('button', { class: 'check', type: 'button', role: 'checkbox', 'aria-checked': String(checked), 'aria-label': h.text, onclick: () => toggleHabit(h.id) }),
+      el('button', { class: 'check', type: 'button', role: 'checkbox', 'aria-checked': String(complete || part), 'aria-label': h.text, onclick: () => toggleHabit(h.id) }),
       editableText(h.text, (v) => rename(data.habits, h.id, v)),
+      e !== 'day' ? el('span', { class: 'cad', title: need > 1 ? `${cnt} of ${need} this ${unit}` : `Once a ${unit}` }, need > 1 ? `${EVERY[e].tag} ${cnt}/${need}` : EVERY[e].tag) : null,
       editingHabits
-        ? [el('button', {
-          class: `small-btn${h.asksAlbum ? ' on' : ''}`, type: 'button', 'aria-pressed': String(!!h.asksAlbum),
-          title: 'Ask which album when this is checked', onclick: () => { touch(h, { asksAlbum: !h.asksAlbum }); change(); },
-        }, '🎵'), el('button', { class: 'small-btn', type: 'button', onclick: () => setRetired(h.id, true) }, 'Retire')]
-        : el('span', { class: 'meta', title: `${plural(n, 'time')} in total, ${s}-day streak` }, el('b', {}, `${n}×`), s > 1 ? ` · 🔥${s}` : ''));
-  }) : [el('li', { class: 'empty' }, 'No daily habits yet.')]));
+        ? el('div', { class: 'habit-tools' },
+          el('button', {
+            class: 'small-btn', type: 'button', title: 'Tap to change how often',
+            onclick: () => { touch(h, { every: e === 'day' ? 'week' : e === 'week' ? 'month' : 'day' }); change(); },
+          }, `↻ ${EVERY[e].tag}`),
+          e !== 'day' ? el('button', {
+            class: 'small-btn', type: 'button', title: `How many times each ${unit}`,
+            onclick: () => { touch(h, { times: need >= 7 ? 1 : need + 1 }); change(); },
+          }, `${need}× a ${unit}`) : null,
+          el('button', {
+            class: `small-btn${h.asksAlbum ? ' on' : ''}`, type: 'button', 'aria-pressed': String(!!h.asksAlbum),
+            title: 'Ask which album when this is checked', onclick: () => { touch(h, { asksAlbum: !h.asksAlbum }); change(); },
+          }, '🎵'),
+          el('button', { class: 'small-btn', type: 'button', onclick: () => setRetired(h.id, true) }, 'Retire'))
+        : el('span', { class: 'meta', title: `${plural(n, 'time')} in total, ${s}-${unit} streak` }, el('b', {}, `${n}×`), s > 1 ? ` · 🔥${s}` : ''));
+  }) : [el('li', { class: 'empty' }, 'No habits yet.')]));
 
   const all = openTasks();
   $('#task-count').textContent = all.length ? String(all.length) : '';
@@ -1006,7 +1094,7 @@ function renderBackfill() {
   const day = backfillDay || addDays(today, -1);
   $('#backfill-day').value = day;
   $('#backfill-day').max = today;
-  const habits = activeHabits();
+  const habits = activeHabits().filter(isDaily);
   fill($('#backfill'), habits.length
     ? habits.map((h) => {
       const checked = doneOn(h, day);
@@ -1040,7 +1128,7 @@ function renderArchive() {
       el('h3', {}, longDate(day), dayLabel(day) ? el('small', {}, dayLabel(day)) : null),
       el('ul', { class: 'list plain' },
         ...habits.map((h) => el('li', { class: 'item' },
-          el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, h.text), el('span', { class: 'tag' }, `daily #${doneDays(h).indexOf(day) + 1}`))),
+          el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, h.text), el('span', { class: 'tag' }, `${EVERY[everyOf(h)].tag.toLowerCase()} #${doneDays(h).indexOf(day) + 1}`))),
         ...tasks.map((t) => el('li', { class: 'item' },
           el('span', { class: 'done-mark' }, '✓'), el('span', { class: 'text' }, t.text),
           t.albumId ? el('span', { class: 'tag' }, albumName(t.albumId)) : catOf(t) ? el('span', { class: 'tag cat-tag', style: `--cat:${catOf(t).color}` }, catOf(t).name) : t.buy ? el('span', { class: 'tag' }, t.cost ? `bought · ${money(t.cost)}` : 'bought') : null,
@@ -1570,7 +1658,7 @@ function bindAdd(form, add) {
   });
 }
 bindAdd($('#add-task'), (text) => addTask(text, null, { cat: todoFilter }));
-bindAdd($('#add-habit'), addHabit);
+bindAdd($('#add-habit'), (text) => addHabit(text, $('#add-habit').every.value));
 bindAdd($('#add-symptom'), pickSymptom);
 $('#add-symptom').text.addEventListener('input', renderSymptomChips);
 for (const b of document.querySelectorAll('#severity button')) {

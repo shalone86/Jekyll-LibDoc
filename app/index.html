@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=12">
+  <link rel="stylesheet" href="style.css?v=13">
 </head>
 <body>
   <header class="top">
@@ -44,11 +44,13 @@
           <span id="daily-progress" class="pill"></span>
           <button id="edit-habits" class="link" type="button">Edit</button>
         </div>
-        <p class="hint">Resets every morning. Each check adds to the count.</p>
+        <p class="hint">Daily habits reset every morning, weekly ones every Sunday and monthly ones on the 1st. Each check adds to the count.</p>
         <ul id="habits" class="list"></ul>
+        <p id="period-progress" class="hint" hidden></p>
         <form id="add-habit" class="add">
-          <input name="text" placeholder="Add a daily habit" autocomplete="off" enterkeyhint="done" aria-label="New daily habit">
-          <button type="submit" aria-label="Add daily habit">+</button>
+          <input name="text" placeholder="Add a habit" autocomplete="off" enterkeyhint="done" aria-label="New habit">
+          <select name="every" aria-label="How often"><option value="day">Daily</option><option value="week">Weekly</option><option value="month">Monthly</option></select>
+          <button type="submit" aria-label="Add habit">+</button>
         </form>
       </section>
 
@@ -308,6 +310,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=12"></script>
+  <script src="app.js?v=13"></script>
 </body>
 </html>
