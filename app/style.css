@@ -400,3 +400,12 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
   100% { opacity: 0; transform: translateY(-14px); }
 }
 @media (prefers-reduced-motion: reduce) { #daily-progress.pop { animation: none; } }
+
+/* Hide or show a task's subtasks */
+.sub-toggle {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 2px; margin: 0 0 8px -6px;
+  border: 0; background: none; color: var(--muted); font-size: 12px; padding: 3px 6px; border-radius: 8px;
+}
+.sub-toggle:active { background: var(--accent-soft); }
+.sub-toggle .caret { width: 10px; color: var(--accent); }
+.task-main .text:has(+ .sub-toggle) { padding-bottom: 0; }

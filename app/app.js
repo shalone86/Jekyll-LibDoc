@@ -48,7 +48,7 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * doses:  { id, limitId, amount, at, day, time, removed, updated }   one logged amount of a limited thing
  * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
  * whenLabel (e.g. 'Spring') and an optional cost.
- * Tasks may also have: cat (category id), parentId (subtask of another task), note ({ id, title }: a
+ * Tasks may also have: cat (category id), parentId (subtask of another task), collapsed (hide its subtasks), note ({ id, title }: a
  * link to a note in the Scriptorium notes app).
  * Albums have kind 'album' (music) or 'project' (anything else); both have steps and sessions.
  * categories: { id, name, color, order, retired, updated }
@@ -1044,7 +1044,9 @@ function renderToday() {
 function taskRow(t) {
   const cat = catOf(t);
   const kids = childTasks(t.id);
-  const sub = kids.length ? el('ul', { class: 'list sub' }, kids.map((k) => taskRow(k))) : null;
+  // Subtasks can be tucked away until you're ready for them (remembered per task).
+  const hidden = kids.length > 0 && !!t.collapsed;
+  const sub = kids.length && !hidden ? el('ul', { class: 'list sub' }, kids.map((k) => taskRow(k))) : null;
   if (sub) enableDrag(sub, (ids) => reorder(data.tasks, ids));
   return el('li', { class: `item task${cat ? ' has-cat' : ''}`, 'data-id': t.id, style: cat ? `--cat:${cat.color}` : null },
     el('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
@@ -1059,6 +1061,11 @@ function taskRow(t) {
     }),
     el('div', { class: 'task-main' },
       editableText(t.text, (v) => rename(data.tasks, t.id, v), { links: true }),
+      kids.length ? el('button', {
+        class: 'sub-toggle', type: 'button', 'aria-expanded': String(!hidden),
+        title: hidden ? 'Show subtasks' : 'Hide subtasks',
+        onclick: () => { touch(t, { collapsed: !hidden }); change(); },
+      }, el('span', { class: 'caret', 'aria-hidden': 'true' }, hidden ? '▸' : '▾'), ` ${plural(kids.length, 'subtask')}`) : null,
       t.note ? el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener', title: 'Open in your notes' }, `📝 ${t.note.title}`) : null),
     el('button', { class: 'more-btn', type: 'button', 'aria-label': `Options for ${t.text}`, onclick: () => openTaskDialog(t.id) }, '⋯'),
     sub);
