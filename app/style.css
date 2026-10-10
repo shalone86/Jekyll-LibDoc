@@ -409,3 +409,7 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 .sub-toggle:active { background: var(--accent-soft); }
 .sub-toggle .caret { width: 10px; color: var(--accent); }
 .task-main .text:has(+ .sub-toggle) { padding-bottom: 0; }
+
+/* Drag albums and projects */
+.card.album .card-head .grip { align-self: center; width: 22px; height: 28px; }
+.card.album.dragging { position: relative; z-index: 2; box-shadow: 0 8px 26px rgb(0 0 0 / 0.22); }
