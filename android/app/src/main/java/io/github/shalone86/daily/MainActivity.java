@@ -2,8 +2,11 @@ package io.github.shalone86.daily;
 
 import android.app.Activity;
 import android.content.Intent;
+import android.content.pm.PackageManager;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebChromeClient;
 import android.webkit.WebResourceRequest;
@@ -64,6 +67,44 @@ public class MainActivity extends Activity {
         private final MainActivity a;
         Bridge(MainActivity activity) { a = activity; }
 
+        /** The page's whole list of upcoming reminders, as JSON: [{id, at, title, loud}]. */
+        @JavascriptInterface
+        public void setReminders(String json) {
+            Reminders.replaceAll(a.getApplicationContext(), json);
+        }
+
+        /** "ok", "notifications-off" or "exact-off". */
+        @JavascriptInterface
+        public String reminderStatus() {
+            return Reminders.status(a.getApplicationContext());
+        }
+
+        /** Android 13+ asks before an app may show notifications; older versions just allow them. */
+        @JavascriptInterface
+        public void requestNotifications() {
+            a.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    if (Build.VERSION.SDK_INT >= 33
+                            && a.checkSelfPermission("android.permission.POST_NOTIFICATIONS") != PackageManager.PERMISSION_GRANTED) {
+                        a.requestPermissions(new String[] {"android.permission.POST_NOTIFICATIONS"}, 1);
+                    } else {
+                        a.openSettings(Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                    }
+                }
+            });
+        }
+
+        @JavascriptInterface
+        public void openAlarmSettings() {
+            a.runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    a.openSettings(Build.VERSION.SDK_INT >= 31 ? Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM : Settings.ACTION_APP_NOTIFICATION_SETTINGS);
+                }
+            });
+        }
+
         @JavascriptInterface
         public void shareText(final String title, final String text) {
             a.runOnUiThread(new Runnable() {
@@ -76,6 +117,17 @@ public class MainActivity extends Activity {
                     a.startActivity(Intent.createChooser(send, title));
                 }
             });
+        }
+    }
+
+    void openSettings(String action) {
+        Intent i = new Intent(action);
+        i.putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName());
+        i.setData(Uri.parse("package:" + getPackageName()));
+        try {
+            startActivity(i);
+        } catch (android.content.ActivityNotFoundException e) {
+            startActivity(new Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + getPackageName())));
         }
     }
 
