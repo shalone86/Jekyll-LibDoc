@@ -48,7 +48,7 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * doses:  { id, limitId, amount, at, day, time, removed, updated }   one logged amount of a limited thing
  * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
  * whenLabel (e.g. 'Spring') and an optional cost.
- * Tasks may also have: cat (category id), parentId (subtask of another task), collapsed (hide its subtasks), note ({ id, title }: a
+ * Tasks may also have: cat (category id), parentId (subtask of another task), collapsed (hide its subtasks), remind (ms timestamp to ring the phone) and remindLoud, note ({ id, title }: a
  * link to a note in the Scriptorium notes app).
  * Albums have kind 'album' (music) or 'project' (anything else); both have steps and sessions.
  * categories: { id, name, color, order, retired, updated }
@@ -1010,7 +1010,56 @@ function render() {
   renderLimits();
   renderArchive();
   renderSymptomLog();
+  syncReminders();
 }
+
+/* ---------- reminders (ring the phone through the Android app) ---------- */
+
+let remindersSent = '';
+// The Android app keeps one alarm per upcoming reminder; give it the whole list whenever it changes.
+function syncReminders() {
+  const bridge = window.AndroidApp;
+  if (!bridge || !bridge.setReminders) return;
+  const since = Date.now() - 864e5;
+  const list = data.tasks.filter((t) => t.remind && !t.doneAt && t.remind > since)
+    .map((t) => ({ id: t.id, at: t.remind, title: t.text, loud: !!t.remindLoud }));
+  const json = JSON.stringify(list);
+  if (json === remindersSent) return;
+  remindersSent = json;
+  try { bridge.setReminders(json); } catch { /* the app is older than reminders */ }
+}
+function remindText(ms) {
+  const d = new Date(ms);
+  const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const days = daysBetween(dayKey(), dayKey(d));
+  if (days === 0) return `Today ${time}`;
+  if (days === 1) return `Tomorrow ${time}`;
+  if (days > 1 && days < 7) return `${WEEKDAYS[d.getDay()].slice(0, 3)} ${time}`;
+  return `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}, ${time}`;
+}
+const localInput = (ms) => { const d = new Date(ms); return `${dayKey(d)}T${pad(d.getHours())}:${pad(d.getMinutes())}`; };
+function setReminder(id, at, loud) {
+  const t = find(data.tasks, id);
+  touch(t, { remind: at, remindLoud: loud ?? !!t.remindLoud });
+  change();
+  const bridge = window.AndroidApp;
+  if (bridge && bridge.reminderStatus && bridge.reminderStatus() === 'notifications-off') bridge.requestNotifications();
+}
+function clearReminder(id) {
+  touch(find(data.tasks, id), { remind: null, remindLoud: false });
+  change();
+}
+// In a browser (no Android app) a reminder can only show while the app is open.
+const shownReminders = new Set();
+setInterval(() => {
+  if (window.AndroidApp && window.AndroidApp.setReminders) return;
+  const now = Date.now();
+  for (const t of data.tasks) {
+    if (!t.remind || t.doneAt || t.remind > now || now - t.remind > 5 * 60000 || shownReminders.has(t.id + t.remind)) continue;
+    shownReminders.add(t.id + t.remind);
+    toast(`⏰ ${t.text}`, null, 30000);
+  }
+}, 15000);
 
 function renderToday() {
   const today = dayKey();
@@ -1102,7 +1151,10 @@ function taskRow(t) {
         title: hidden ? 'Show subtasks' : 'Hide subtasks',
         onclick: () => { touch(t, { collapsed: !hidden }); change(); },
       }, el('span', { class: 'caret', 'aria-hidden': 'true' }, hidden ? '▸' : '▾'), ` ${plural(kids.length, 'subtask')}`) : null,
-      t.note ? el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener', title: 'Open in your notes' }, `📝 ${t.note.title}`) : null),
+      t.note ? el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener', title: 'Open in your notes' }, `📝 ${t.note.title}`) : null,
+      t.remind ? el('button', {
+        class: `remind-chip${t.remind < Date.now() ? ' over' : ''}`, type: 'button', title: 'Change the reminder', onclick: () => openTaskDialog(t.id),
+      }, `⏰ ${remindText(t.remind)}`) : null),
     el('button', { class: 'more-btn', type: 'button', 'aria-label': `Options for ${t.text}`, onclick: () => openTaskDialog(t.id) }, '⋯'),
     sub);
 }
@@ -1529,11 +1581,13 @@ function renderSessionChoices() {
 
 let taskDialogId = null;
 let notePicking = false;
+let remindPicking = false;
 let noteList = null;
 
 function openTaskDialog(id) {
   taskDialogId = id;
   notePicking = false;
+  remindPicking = false;
   $('#task-form').sub.value = '';
   renderTaskDialog();
   $('#task-dialog').showModal();
@@ -1556,6 +1610,52 @@ function renderTaskDialog() {
   $('#task-outdent').hidden = !parent;
   $('#task-where').textContent = parent ? `Subtask of “${parent.text}”` : '';
   renderNotePicker(t);
+  renderRemindPicker(t);
+}
+function renderRemindPicker(t) {
+  const box = $('#task-remind');
+  const bridge = window.AndroidApp;
+  const status = bridge && bridge.reminderStatus ? bridge.reminderStatus() : null;
+  const pick = (ms) => { setReminder(t.id, ms); remindPicking = false; renderTaskDialog(); };
+  const hint = !bridge
+    ? el('p', { class: 'hint' }, 'Rings your phone in the Android app. In a browser it only shows while this page is open.')
+    : !bridge.setReminders
+      ? el('p', { class: 'hint' }, 'Update the Android app to make your phone ring: ', el('a', { href: 'daily.apk', download: '' }, 'get the new version'), '.')
+      : status === 'notifications-off'
+        ? el('p', { class: 'hint warn' }, 'Notifications are off for Daily. ', el('button', { class: 'link', type: 'button', onclick: () => bridge.requestNotifications() }, 'Allow them'))
+        : status === 'exact-off'
+          ? el('p', { class: 'hint warn' }, 'Android may ring a few minutes late until you allow alarms. ', el('button', { class: 'link', type: 'button', onclick: () => bridge.openAlarmSettings() }, 'Allow alarms'))
+          : null;
+  if (t.remind && !remindPicking) {
+    fill(box, el('div', { class: 'note-row' },
+      el('span', { class: `remind-chip${t.remind < Date.now() ? ' over' : ''}` }, `⏰ ${remindText(t.remind)}`),
+      el('button', { class: 'small-btn', type: 'button', onclick: () => { remindPicking = true; renderRemindPicker(t); } }, 'Change'),
+      el('button', { class: 'small-btn', type: 'button', onclick: () => { clearReminder(t.id); renderTaskDialog(); } }, 'Remove'),
+      el('button', {
+        class: `small-btn${t.remindLoud ? ' on' : ''}`, type: 'button', 'aria-pressed': String(!!t.remindLoud),
+        title: 'Ring like an alarm instead of a normal notification', onclick: () => { setReminder(t.id, t.remind, !t.remindLoud); renderTaskDialog(); },
+      }, '🚨 Ring like an alarm')), hint);
+    return;
+  }
+  if (!remindPicking) {
+    fill(box, el('button', { class: 'small-btn', type: 'button', onclick: () => { remindPicking = true; renderRemindPicker(t); } }, '⏰ Remind me…'), hint);
+    return;
+  }
+  const at = (days, hour) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d.getTime(); };
+  const soon = Date.now() + 3600000;
+  const input = el('input', { type: 'datetime-local', class: 'remind-input', value: localInput(Math.ceil(soon / 900000) * 900000), 'aria-label': 'Day and time' });
+  fill(box,
+    el('div', { class: 'chips' },
+      el('button', { class: 'chip', type: 'button', onclick: () => pick(Date.now() + 3600000) }, 'In 1 hour'),
+      new Date().getHours() < 17 ? el('button', { class: 'chip', type: 'button', onclick: () => pick(at(0, 18)) }, 'This evening') : null,
+      el('button', { class: 'chip', type: 'button', onclick: () => pick(at(1, 9)) }, 'Tomorrow 9 AM')),
+    el('div', { class: 'add' }, input,
+      el('button', {
+        type: 'button', 'aria-label': 'Set reminder',
+        onclick: () => { const ms = new Date(input.value).getTime(); if (!ms) return; pick(ms); },
+      }, '✓')),
+    t.remind ? el('button', { class: 'link', type: 'button', onclick: () => { remindPicking = false; renderRemindPicker(t); } }, 'Cancel') : null,
+    hint);
 }
 function renderNotePicker(t) {
   const box = $('#task-note');
@@ -1676,13 +1776,13 @@ function enableDrag(list, onDrop) {
 
 let toastTimer = null;
 let toastUndo = null;
-function toast(text, undo) {
+function toast(text, undo, ms = 5000) {
   $('#toast-text').textContent = text;
   toastUndo = undo;
   $('#toast-undo').hidden = !undo;
   $('#toast').hidden = false;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { $('#toast').hidden = true; toastUndo = null; }, 5000);
+  toastTimer = setTimeout(() => { $('#toast').hidden = true; toastUndo = null; }, ms);
 }
 $('#toast-undo').addEventListener('click', () => {
   $('#toast').hidden = true;
