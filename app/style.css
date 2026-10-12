@@ -424,3 +424,8 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 .remind-input { flex: 1; min-width: 0; font: inherit; }
 .hint.warn { color: var(--sev2); }
 .hint .link { margin-left: 0; padding: 0; font-size: inherit; }
+
+/* Swipe away a 💤 reminder */
+.dust-row { display: flex; align-items: stretch; gap: 4px; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.dust-row .dust { flex: 1; min-width: 0; }
+.dust-row .x { flex: none; width: 34px; border: 0; background: none; color: var(--muted); font-size: 20px; }

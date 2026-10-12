@@ -422,6 +422,19 @@ function dustDays(a) {
   return n >= DUST_DAYS ? n : 0;
 }
 
+// The 💤 reminder on Today: swiping it away hides it until another DUST_DAYS days have passed.
+function dustAlert(a) {
+  const n = dustDays(a);
+  if (!n || !a.dustSnoozed) return n;
+  return daysBetween(a.dustSnoozed, dayKey()) >= DUST_DAYS ? n : 0;
+}
+function dismissDust(id) {
+  const a = find(data.albums, id);
+  touch(a, { dustSnoozed: dayKey() });
+  change();
+  toast(`Hid “${a.name}” — it'll nudge you again in ${DUST_DAYS} days`, () => { touch(a, { dustSnoozed: null }); change(); });
+}
+
 function addAlbum(name, kind = 'album') {
   const now = Date.now();
   const order = data.albums.reduce((m, a) => Math.max(m, a.order || 0), 0) + 1;
@@ -1489,10 +1502,63 @@ function whenSelect(t) {
 let lastWhen = 'someday';
 
 function renderDust() {
-  const dusty = activeAll().map((a) => [a, dustDays(a)]).filter(([, n]) => n);
+  const dusty = activeAll().map((a) => [a, dustAlert(a)]).filter(([, n]) => n);
   $('#dust').hidden = !dusty.length;
-  fill($('#dust'), dusty.map(([a, n]) => el('button', { class: 'dust', type: 'button', onclick: () => showView(kindOf(a) === 'album' ? 'albums' : 'projects') },
-    `💤 ${a.name} — untouched for ${n} days`)));
+  fill($('#dust'), dusty.map(([a, n]) => {
+    const row = el('div', { class: 'dust-row' },
+      el('button', { class: 'dust', type: 'button', title: 'Swipe away to hide it for now', onclick: () => showView(kindOf(a) === 'album' ? 'albums' : 'projects') },
+        `💤 ${a.name} — untouched for ${n} days`),
+      el('button', { class: 'x', type: 'button', 'aria-label': `Hide the reminder for ${a.name}`, onclick: () => dismissDust(a.id) }, '×'));
+    swipeAway(row, () => dismissDust(a.id));
+    return row;
+  }));
+}
+
+// Drag a row sideways far enough and it slides off; a short drag springs back. Vertical drags still scroll.
+function swipeAway(row, onGone) {
+  let start = null;
+  let swiping = false;
+  row.addEventListener('pointerdown', (e) => {
+    if (e.target.closest('.x') || (e.pointerType === 'mouse' && e.button !== 0)) return;
+    start = { x: e.clientX, y: e.clientY, id: e.pointerId };
+    swiping = false;
+  });
+  row.addEventListener('pointermove', (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x;
+    const dy = e.clientY - start.y;
+    if (!swiping) {
+      if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { start = null; return; }
+      if (Math.abs(dx) < 8) return;
+      swiping = true;
+      row.setPointerCapture(e.pointerId);
+      row.style.transition = 'none';
+    }
+    row.style.transform = `translateX(${dx}px)`;
+    row.style.opacity = String(Math.max(0.2, 1 - Math.abs(dx) / (row.offsetWidth * 1.1)));
+  });
+  const finish = (e) => {
+    if (!start || e.pointerId !== start.id) return;
+    const dx = e.clientX - start.x;
+    const was = swiping;
+    start = null;
+    swiping = false;
+    if (!was) return;
+    row.style.transition = 'transform 0.2s, opacity 0.2s';
+    if (e.type === 'pointerup' && Math.abs(dx) > Math.max(80, row.offsetWidth * 0.3)) {
+      row.style.transform = `translateX(${dx > 0 ? '110%' : '-110%'})`;
+      row.style.opacity = '0';
+      setTimeout(onGone, 200);
+    } else {
+      row.style.transform = '';
+      row.style.opacity = '';
+    }
+  };
+  row.addEventListener('pointerup', finish);
+  row.addEventListener('pointercancel', finish);
+  // A drag that ends on the button shouldn't also count as a tap on it.
+  row.addEventListener('click', (e) => { if (Math.abs(e.clientX - (row._downX ?? e.clientX)) > 8) e.stopPropagation(); }, true);
+  row.addEventListener('pointerdown', (e) => { row._downX = e.clientX; });
 }
 
 const stepRow = (t) => taskRow(t);
