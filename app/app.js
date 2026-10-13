@@ -184,8 +184,147 @@ function addTask(text, albumId = null, extra = {}) {
   const siblings = extra.parentId ? childTasks(extra.parentId) : openTasks(albumId);
   // New tasks go on top; new subtasks go at the bottom of their parent.
   const order = extra.parentId ? nextOrder(siblings) : siblings.reduce((m, x) => Math.min(m, x.order), 1) - 1;
-  data.tasks.push({ id: uid(), text, albumId, order, created: now, doneAt: null, doneDay: null, updated: now, cat: null, parentId: null, ...extra });
+  const t = { id: uid(), text, albumId, order, created: now, doneAt: null, doneDay: null, updated: now, cat: null, parentId: null, ...extra };
+  data.tasks.push(t);
   change();
+  return t;
+}
+
+/* ---------- plain-language reminders: "movie Friday 4:15pm" ---------- */
+
+const DAY_WORDS = { sun: 0, mon: 1, tue: 2, wed: 3, thu: 4, fri: 5, sat: 6 };
+const MONTH_WORDS = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11 };
+const WORD_TIMES = { noon: [12, 0], midnight: [0, 0], morning: [9, 0], afternoon: [15, 0], evening: [18, 0], tonight: [20, 0], night: [20, 0] };
+
+// Finds a day and time written inside a task ("movie Friday 4:15pm", "call mom in 2 hours",
+// "pay rent tomorrow at 9") and returns { text: the task without it, at: ms }, or null.
+// It needs a clock time, a time of day (tonight, evening…), "in 2 hours" or "tomorrow";
+// a bare weekday or date isn't enough, so things like "Sunday school" are left alone.
+function parseReminder(raw, nowDate = new Date()) {
+  const text = String(raw);
+  const cuts = [];
+  const take = (re) => {
+    const m = re.exec(text);
+    if (!m) return null;
+    cuts.push([m.index, m.index + m[0].length]);
+    return m;
+  };
+  const now = new Date(nowDate);
+  const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
+
+  // "in 2 hours", "in half an hour", "in 3 days"
+  const rel = take(/\bin\s+(half an?|an?|\d+(?:\.\d+)?)\s*(min(?:ute)?s?|hrs?|hours?|days?|weeks?)\b/i);
+  let relMs = null;
+  let relDays = 0;
+  if (rel) {
+    const n = /half/i.test(rel[1]) ? 0.5 : /^an?$/i.test(rel[1]) ? 1 : parseFloat(rel[1]);
+    const unit = rel[2].toLowerCase();
+    if (unit.startsWith('m')) relMs = n * 60000;
+    else if (unit.startsWith('h')) relMs = n * 3600000;
+    else relDays = Math.round(n * (unit.startsWith('w') ? 7 : 1));
+  }
+
+  // clock time: 4:15pm, 4pm, 16:30, "at 4", @4
+  let hm = null;
+  let softWord = null;
+  let m = take(/(?:\bat\s+|@\s*)?\b(\d{1,2})(?::(\d{2}))?\s*([ap])\.?m\b\.?/i);
+  if (m) {
+    const hh = parseInt(m[1], 10);
+    const mm = parseInt(m[2] || '0', 10);
+    if (hh < 1 || hh > 12 || mm > 59) return null;
+    hm = [(hh % 12) + (m[3].toLowerCase() === 'p' ? 12 : 0), mm];
+  } else if ((m = take(/(\bat\s+)?\b([01]?\d|2[0-3]):([0-5]\d)\b/))) {
+    let h = parseInt(m[2], 10);
+    // "4:15" or "7:30" with no am/pm: afternoons for 1–6, mornings for 7–11
+    if (h >= 1 && h <= 6) h += 12;
+    hm = [h, parseInt(m[3], 10)];
+    // a bare "3:16" could be a Bible verse: it needs a day ("Friday 3:16") or "at"
+    if (!m[1]) softWord = cuts[cuts.length - 1];
+  } else if ((m = take(/(?:\bat\s+|@\s*)(\d{1,2})\b(?!\s*[:/\-])/i))) {
+    let h = parseInt(m[1], 10);
+    if (h > 23) hm = null;
+    else { if (h >= 1 && h <= 6) h += 12; hm = [h, 0]; }
+  }
+  // "evening", "morning"… only count next to a day ("tomorrow evening") or after "at"; "Midnight Mass" stays a task name
+  if (!hm) {
+    const w = take(/(\bat\s+)?\b(noon|midnight|morning|afternoon|evening|tonight|night)\b/i);
+    if (w) {
+      hm = WORD_TIMES[w[2].toLowerCase()];
+      if (!w[1] && w[2].toLowerCase() !== 'tonight') softWord = cuts[cuts.length - 1];
+    }
+  }
+  if (hm) hm = [hm[0], hm[1]];
+
+  // the day: today, tomorrow, a weekday, or a date
+  let day = null;
+  let explicit = false;
+  if ((m = take(/\b(?:(next|this)\s+)?(sun|mon|tue|wed|thu|fri|sat)(?:day|s|sday|nesday|rsday|urday|r|rs)?\b/i))) {
+    const target = DAY_WORDS[m[2].toLowerCase()];
+    day = startOfDay(now);
+    let diff = (target - day.getDay() + 7) % 7;
+    if (m[1] && m[1].toLowerCase() === 'next') diff = (7 - day.getDay()) + target; // that weekday in next Sunday–Saturday week
+    else if (diff === 0 && hm && (hm[0] * 60 + hm[1]) * 60000 <= now - startOfDay(now)) diff = 7;
+    day.setDate(day.getDate() + diff);
+    explicit = true;
+  } else if ((m = take(/\b(tomorrow|tmrw|tmr|today|tonight)\b/i))) {
+    const word = m[1].toLowerCase();
+    day = startOfDay(now);
+    if (word.startsWith('tom') || word === 'tmr' || word === 'tmrw') day.setDate(day.getDate() + 1);
+    if (word === 'tonight' && !hm) hm = WORD_TIMES.tonight;
+    if (/^t(om|mr)/.test(word) && !hm) hm = [9, 0];
+    explicit = true;
+  } else if ((m = take(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?\s+(\d{1,2})(?:st|nd|rd|th)?\b/i)) || (m = take(/\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/))) {
+    let month; let date; let year = now.getFullYear();
+    if (/^[a-z]/i.test(m[1])) { month = MONTH_WORDS[m[1].toLowerCase()]; date = parseInt(m[2], 10); }
+    else { month = parseInt(m[1], 10) - 1; date = parseInt(m[2], 10); if (m[3]) year = m[3].length === 2 ? 2000 + parseInt(m[3], 10) : parseInt(m[3], 10); }
+    if (month < 0 || month > 11 || date < 1 || date > 31) return null;
+    day = new Date(year, month, date);
+    if (!m[3] && day < startOfDay(now)) day.setFullYear(year + 1);
+    explicit = true;
+  }
+
+  if (softWord && !explicit) {
+    cuts.splice(cuts.indexOf(softWord), 1);
+    hm = null;
+  }
+
+  let at;
+  if (relMs != null) {
+    at = now.getTime() + relMs;
+  } else if (relDays) {
+    const d = startOfDay(now);
+    d.setDate(d.getDate() + relDays);
+    d.setHours(hm ? hm[0] : 9, hm ? hm[1] : 0, 0, 0);
+    at = d.getTime();
+  } else if (hm || (day && /tomorrow|tmrw|tmr/i.test(text))) {
+    const d = day ? new Date(day) : startOfDay(now);
+    d.setHours(hm[0], hm[1], 0, 0);
+    if (!day && d.getTime() <= now.getTime() + 60000) d.setDate(d.getDate() + 1); // "at 9" after 9: tomorrow
+    at = d.getTime();
+  } else {
+    return null;
+  }
+  if (!explicit && !hm && relMs == null && !relDays) return null;
+  if (at <= now.getTime()) return null;
+
+  // the task is what's left once the time words are taken out
+  let out = text;
+  for (const [a, b] of cuts.sort((x, y) => y[0] - x[0])) out = `${out.slice(0, a)} ${out.slice(b)}`;
+  out = out.replace(/\s+/g, ' ').trim()
+    .replace(/^(?:(?:at|on|by|for|around|this|next|in|@|-|,|:)\s+)+/i, '')
+    .replace(/(?:\s+(?:at|on|by|for|around|this|next|in|@|-|,|:))+$/i, '').trim();
+  return { text: out || text.trim(), at };
+}
+
+// Adds a task; if the text says when ("movie Friday 4:15pm") it also sets that reminder.
+function addTaskSmart(raw, albumId = null, extra = {}) {
+  const r = parseReminder(raw);
+  if (!r) return addTask(raw, albumId, extra);
+  const t = addTask(r.text, albumId, { ...extra, remind: r.at, remindLoud: false });
+  toast(`⏰ “${r.text}” — ${remindText(r.at)}`, () => { touch(t, { text: raw, remind: null }); change(); });
+  const bridge = window.AndroidApp;
+  if (bridge && bridge.reminderStatus && bridge.reminderStatus() === 'notifications-off') bridge.requestNotifications();
+  return t;
 }
 function completeTask(id) {
   const t = find(data.tasks, id);
@@ -878,9 +1017,12 @@ async function syncOnce() {
   const remoteSha = remote.get(dataPath);
   if (remoteSha && remoteSha !== lastSyncedSha) {
     const blob = await gh(`/git/blobs/${remoteSha}`);
+    const before = JSON.stringify(data);
     data = mergeData(data, normalize(JSON.parse(fromBase64(blob.content))));
-    store.set('data', data);
-    render();
+    if (JSON.stringify(data) !== before) {
+      store.set('data', data);
+      render();
+    }
   }
 
   const files = buildFiles();
@@ -1003,8 +1145,19 @@ function editableText(text, onRename, { allowEmpty = false, placeholder = null, 
   return span;
 }
 
+// A tap that lands while the screen is being rebuilt gets lost, so wait until the finger is up.
+let pointerDownAt = 0;
+addEventListener('pointerdown', () => { pointerDownAt = Date.now(); }, true);
+const pointerUp = () => {
+  pointerDownAt = 0;
+  if (renderPending) setTimeout(() => { if (!pointerDownAt) render(); }, 80);
+};
+addEventListener('pointerup', pointerUp, true);
+addEventListener('pointercancel', pointerUp, true);
+const fingerDown = () => pointerDownAt && Date.now() - pointerDownAt < 3000;
+
 function render() {
-  if (dragging) { renderPending = true; return; }
+  if (dragging || fingerDown()) { renderPending = true; return; }
   if (document.activeElement && document.activeElement.matches('.text, .cost, .limit-amount')) {
     // Don't yank a line out from under someone who is typing; re-render when they finish.
     renderPending = true;
@@ -1580,7 +1733,7 @@ function renderAlbums(kind = 'album') {
     const form = el('form', { class: 'add add-top' },
       el('input', { name: 'text', placeholder: 'Add a step', autocomplete: 'off', enterkeyhint: 'done', 'aria-label': `New step for ${a.name}` }),
       el('button', { type: 'submit', 'aria-label': 'Add step' }, '+'));
-    bindAdd(form, (text) => { refocusAlbum = a.id; addTask(text, a.id); });
+    bindAdd(form, (text) => { refocusAlbum = a.id; addTaskSmart(text, a.id); });
     if (refocusAlbum === a.id) { refocusAlbum = null; focusAfter = form.text; }
     return el('section', { class: `card album${dust ? ' dusty' : ''}`, 'data-id': a.id },
       el('div', { class: 'card-head' },
@@ -1869,7 +2022,13 @@ function bindAdd(form, add) {
     form.text.focus();
   });
 }
-bindAdd($('#add-task'), (text) => addTask(text, null, { cat: todoFilter }));
+bindAdd($('#add-task'), (text) => { addTaskSmart(text, null, { cat: todoFilter }); $('#task-hint').hidden = true; });
+// Show what it understood as you type, so you can see the reminder before adding.
+$('#add-task').text.addEventListener('input', () => {
+  const r = parseReminder($('#add-task').text.value);
+  $('#task-hint').hidden = !r;
+  if (r) $('#task-hint').textContent = `⏰ Reminder: ${remindText(r.at)} — “${r.text}”`;
+});
 bindAdd($('#add-habit'), (text) => addHabit(text, $('#add-habit').every.value));
 bindAdd($('#add-symptom'), pickSymptom);
 $('#add-symptom').text.addEventListener('input', renderSymptomChips);
@@ -1956,7 +2115,7 @@ $('#task-form').addEventListener('submit', (e) => {
   const text = clean($('#task-form').sub.value);
   if (!text) return;
   const t = find(data.tasks, taskDialogId);
-  addTask(text, t.albumId || null, { parentId: t.id, cat: t.cat || null });
+  addTaskSmart(text, t.albumId || null, { parentId: t.id, cat: t.cat || null });
   $('#task-form').sub.value = '';
   $('#task-form').sub.focus();
   toast(`Added a subtask to “${t.text}”`);
