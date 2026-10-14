@@ -375,11 +375,13 @@ function toggleHabit(id, day = dayKey()) {
 }
 
 // Confetti and a cheer, for finishing the last daily habit of the day.
-function celebrate() {
+function celebrate(message = '🎉 All done for today!', { pop = true } = {}) {
   const pill = $('#daily-progress');
-  pill.classList.remove('pop');
-  void pill.offsetWidth;
-  pill.classList.add('pop');
+  if (pop) {
+    pill.classList.remove('pop');
+    void pill.offsetWidth;
+    pill.classList.add('pop');
+  }
   if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
   const colors = ['#2f7d5b', '#e8b04a', '#e0735f', '#5b8def', '#b66fd1', '#f06bb0'];
   const layer = el('div', { class: 'confetti', 'aria-hidden': 'true' },
@@ -387,7 +389,7 @@ function celebrate() {
       style: `--x:${(Math.random() * 100).toFixed(1)}vw;--dx:${((Math.random() - 0.5) * 40).toFixed(1)}vw;--r:${Math.round(Math.random() * 720 - 360)}deg;`
         + `--d:${(1.8 + Math.random() * 1.4).toFixed(2)}s;--w:${(Math.random() * 0.5).toFixed(2)}s;--c:${colors[i % colors.length]}`,
     })),
-    el('div', { class: 'cheer' }, '🎉 All done for today!'));
+    el('div', { class: 'cheer' }, message));
   document.body.append(layer);
   setTimeout(() => layer.remove(), 3800);
 }
@@ -593,7 +595,10 @@ function setAlbumFinished(id, finished) {
   touch(a, finished ? { finishedAt: Date.now(), finishedDay: dayKey() } : { finishedAt: null, finishedDay: null });
   change();
   // Finished albums and projects leave their tab right away; they live in the Archive.
-  if (finished) toast(`Finished “${a.name}” 🎉 — moved to the Archive`, () => setAlbumFinished(id, false));
+  if (finished) {
+    toast(`Finished “${a.name}” 🎉 — moved to the Archive`, () => setAlbumFinished(id, false));
+    celebrate(`🏁 “${a.name}” is finished!`, { pop: false });
+  }
   else toast(`Reopened “${a.name}”`);
 }
 // Working on an album or project moves it to the top of its list.
