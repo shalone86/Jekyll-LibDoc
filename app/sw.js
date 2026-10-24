@@ -3,8 +3,8 @@
 // 'no-cache' makes every online load check with the server, so the page and its code can't come
 // from different versions (GitHub Pages otherwise lets the browser reuse files for 10 minutes).
 // When app.js or style.css change, bump CACHE and the ?v= numbers in index.html together.
-const CACHE = 'daily-v21';
-const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
+const CACHE = 'daily-v22';
+const SHELL = ['./', 'notelib.js', 'index.html', 'style.css', 'app.js', 'manifest.webmanifest', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));

@@ -523,9 +523,13 @@ const noteTitle = (n) => {
   const line = (n.text || '').split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).find(Boolean);
   return (line || 'Untitled').slice(0, 80);
 };
-const noteBody = (n) => (n.text || '').split('\n').slice(1).join(' ').replace(/\s+/g, ' ').trim();
+const noteBody = (n) => (n.text || '').split('\n').slice(1).join(' ').replace(/\[[ xX]\]|[*#>=~`_]+/g, '').replace(/\s+/g, ' ').trim();
 const liveNotes = () => data.notes.filter((n) => !n.removed).sort((a, b) => b.updated - a.updated);
 const shortDay = (ms) => { const d = new Date(ms); return `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`; };
+
+let noteLib = null; // formatting and math (notelib.js), loaded in the background
+import('./notelib.js').then((m) => { noteLib = m; if (openNoteId) showNoteMode(); }).catch(() => {});
+let noteReading = false;
 
 let openNoteId = null;
 let openNoteDraft = null; // a new note that hasn't been typed in yet isn't saved
@@ -554,11 +558,55 @@ function openNote(id) {
   $('#notes-list-pane').hidden = true;
   $('#note-pane').hidden = false;
   $('#note-text').value = n.text || '';
+  $('#note-math').hidden = true;
   $('#note-meta').textContent = n.updated ? `Edited ${shortDay(n.updated)}` : 'New';
   const src = $('#note-src');
   src.hidden = !n.src;
   fill(src, n.src ? ['From ', el('a', { href: n.src, target: '_blank', rel: 'noopener' }, shortUrl(n.src))] : []);
+  noteReading = !!(n.text || '').trim() && !(openNoteDraft && openNoteDraft.id === id);
+  showNoteMode();
   scrollTo(0, 0);
+}
+
+// Read mode shows the formatting (and answers to tick boxes); Edit mode is the plain text with a toolbar.
+function showNoteMode() {
+  const reading = noteReading && !!noteLib;
+  $('#note-read').hidden = !reading;
+  $('#note-text').hidden = reading;
+  $('#note-format').hidden = reading;
+  $('#note-math').hidden = true;
+  $('#note-mode').textContent = reading ? 'Edit' : 'Read';
+  $('#note-mode').hidden = !noteLib;
+  if (reading) renderNoteRead();
+}
+
+function renderNoteRead() {
+  const n = find(data.notes, openNoteId);
+  const box = $('#note-read');
+  box.innerHTML = noteLib.markdownToHtml(n ? n.text : '');
+  [...box.querySelectorAll('ul.checklist > li, ul.checklist li')].forEach((li, i) => {
+    const on = li.dataset.checked === 'true';
+    li.classList.toggle('done', on);
+    li.prepend(el('input', { type: 'checkbox', class: 'note-check', ...(on ? { checked: '' } : {}), 'aria-label': 'Done', onchange: (e) => toggleNoteCheck(i, e.target.checked) }));
+  });
+  if (!box.textContent.trim()) box.append(el('p', { class: 'hint' }, 'Nothing here yet. Tap Edit to write.'));
+}
+
+// The i-th "- [ ]" line in the note (outside code blocks) is ticked or unticked.
+function toggleNoteCheck(i, on) {
+  const n = find(data.notes, openNoteId);
+  if (!n) return;
+  let fence = false;
+  let seen = -1;
+  const lines = n.text.split('\n').map((line) => {
+    if (/^\s*```/.test(line)) { fence = !fence; return line; }
+    if (fence || !/^\s*([-*+]|\d+[.)])\s+\[[ xX]\]/.test(line)) return line;
+    return ++seen === i ? line.replace(/\[[ xX]\]/, on ? '[x]' : '[ ]') : line;
+  });
+  touch(n, { text: lines.join('\n') });
+  $('#note-text').value = n.text;
+  change();
+  renderNoteRead();
 }
 
 function closeNote() {
@@ -583,14 +631,128 @@ function startNote() {
   $('#note-text').focus();
 }
 
-$('#note-text').addEventListener('input', () => {
+$('#note-text').addEventListener('input', (e) => {
   let n = find(data.notes, openNoteId);
   if (!n && openNoteDraft && openNoteDraft.id === openNoteId) { n = openNoteDraft; data.notes.push(n); openNoteDraft = null; }
   if (!n) return;
   touch(n, { text: $('#note-text').value });
+  const ta = $('#note-text');
+  if (noteLib && e.data === '=' && e.inputType === 'insertText' && ta.selectionStart === ta.selectionEnd) {
+    // "12*4 + 3 =" → the answer appears after the "="
+    const caret = ta.selectionStart;
+    const res = noteLib.inlineCalc(ta.value.slice(ta.value.lastIndexOf('\n', caret - 1) + 1, caret));
+    if (res) { replaceNoteText(caret, caret, ` ${res.text}`); return; }
+  }
   $('#note-meta').textContent = `Edited ${shortDay(n.updated)}`;
   change();
 });
+$('#note-mode').addEventListener('click', () => {
+  noteReading = !noteReading;
+  showNoteMode();
+  if (!noteReading) $('#note-text').focus();
+});
+// Formatting buttons act on the selected text (or the lines it touches) without taking focus from the text box.
+$('#note-tools').addEventListener('mousedown', (e) => { if (e.target.closest('button[data-fmt]')) e.preventDefault(); });
+$('#note-tools').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-fmt]');
+  if (b) formatNote(b.dataset.fmt);
+});
+
+function replaceNoteText(start, end, text, selStart = start + text.length, selEnd = selStart) {
+  const ta = $('#note-text');
+  ta.focus();
+  ta.setSelectionRange(start, end);
+  if (!document.execCommand('insertText', false, text)) { // keeps Undo working where the browser allows it
+    ta.setRangeText(text, start, end, 'end');
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  ta.setSelectionRange(selStart, selEnd);
+}
+
+function wrapNote(mark) {
+  const ta = $('#note-text');
+  const { selectionStart: a, selectionEnd: b, value } = ta;
+  const m = mark.length;
+  if (a !== b && value.slice(a - m, a) === mark && value.slice(b, b + m) === mark) { // already wrapped: unwrap
+    replaceNoteText(a - m, b + m, value.slice(a, b), a - m, b - m);
+  } else if (a === b) {
+    replaceNoteText(a, b, mark + mark, a + m);
+  } else {
+    replaceNoteText(a, b, mark + value.slice(a, b) + mark, a + m, b + m);
+  }
+}
+
+function prefixNoteLines(kind) {
+  const ta = $('#note-text');
+  const { selectionStart: a, selectionEnd: b, value } = ta;
+  const start = value.lastIndexOf('\n', a - 1) + 1;
+  let end = value.indexOf('\n', b);
+  if (end < 0) end = value.length;
+  const lines = value.slice(start, end).split('\n');
+  const LIST = /^(\s*)(?:[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+|>\s?|#{1,6}\s+)/;
+  const marks = {
+    ul: [/^\s*[-*+]\s+(?!\[[ xX]\])/, () => '- '],
+    ol: [/^\s*\d+[.)]\s+/, (i) => `${i + 1}. `],
+    check: [/^\s*[-*+]\s+\[[ xX]\]\s+/, () => '- [ ] '],
+    quote: [/^\s*>\s?/, () => '> '],
+  };
+  let out = lines;
+  if (kind === 'head') { // none → # → ## → ### → none
+    const level = (/^(#{1,6})\s+/.exec(lines[0]) || [''])[0].trim().length;
+    const body = lines[0].replace(/^#{1,6}\s+/, '');
+    out = [level >= 3 ? body : `${'#'.repeat(level + 1)} ${body}`, ...lines.slice(1)];
+  } else {
+    const [has, make] = marks[kind];
+    const all = lines.every((l) => !l.trim() || has.test(l));
+    out = lines.map((l, i) => (!l.trim() ? l : all ? l.replace(has, '') : make(i) + l.replace(LIST, '$1')));
+  }
+  const text = out.join('\n');
+  replaceNoteText(start, end, text, start, start + text.length);
+}
+
+function linkNote() {
+  const ta = $('#note-text');
+  const { selectionStart: a, selectionEnd: b, value } = ta;
+  const label = value.slice(a, b) || 'link';
+  const ins = `[${label}](https://)`;
+  replaceNoteText(a, b, ins, a + label.length + 3, a + ins.length - 1);
+}
+
+function mathNote() {
+  const box = $('#note-math');
+  if (!box.hidden) { box.hidden = true; return; }
+  const ta = $('#note-text');
+  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
+  const text = sel || ta.value;
+  const nums = noteLib.extractNumbers(text);
+  const stats = noteLib.summarize(nums);
+  const rows = stats ? [['Sum', stats.sum], ['Average', stats.average], ['Count', stats.count], ['Min', stats.min], ['Max', stats.max], ['Difference', stats.difference], ['Product', stats.product], ['Quotient', stats.quotient]] : [];
+  const at = ta.selectionEnd;
+  fill(box,
+    el('p', { class: 'math-head' }, stats ? `${plural(nums.length, 'number')} in ${sel ? 'your selection' : 'this note'}: ${nums.slice(0, 8).map(noteLib.formatNumber).join(', ')}${nums.length > 8 ? '…' : ''}` : 'No numbers found.'),
+    rows.map(([label, v]) => el('button', {
+      class: 'math-row', type: 'button',
+      onclick: () => {
+        const value = noteLib.formatNumber(v);
+        if (sel) replaceNoteText(at, at, ` = ${value}`);
+        else { const end = ta.value.length; replaceNoteText(end, end, `${end && !ta.value.endsWith('\n') ? '\n' : ''}**${label}: ${value}**\n`); }
+        box.hidden = true;
+      },
+    }, el('span', {}, label), el('b', {}, noteLib.formatNumber(v)), el('span', { class: 'math-ins' }, 'Insert'))),
+    el('p', { class: 'hint' }, 'Tip: type something like 12*4 + 3 = and the answer appears.'));
+  box.hidden = false;
+}
+
+function formatNote(kind) {
+  if (!openNoteId) return;
+  if (kind === 'bold') return wrapNote('**');
+  if (kind === 'italic') return wrapNote('*');
+  if (kind === 'strike') return wrapNote('~~');
+  if (kind === 'mark') return wrapNote('==');
+  if (kind === 'link') return linkNote();
+  if (kind === 'math') return noteLib && mathNote();
+  prefixNoteLines(kind);
+}
 $('#new-note').addEventListener('click', startNote);
 $('#note-back').addEventListener('click', closeNote);
 $('#note-search').addEventListener('input', (e) => { noteQuery = clean(e.target.value); renderNotes(); });
