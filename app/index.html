@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=21">
+  <link rel="stylesheet" href="style.css?v=22">
 </head>
 <body>
   <header class="top">
@@ -158,6 +158,24 @@
           <button id="note-delete" class="link" type="button">Delete</button>
         </div>
         <p id="note-src" class="hint" hidden></p>
+        <div id="note-tools" class="note-tools" role="toolbar" aria-label="Formatting">
+          <span id="note-format" class="note-format">
+            <button type="button" data-fmt="head" title="Heading" aria-label="Heading"><b>H</b></button>
+            <button type="button" data-fmt="bold" title="Bold" aria-label="Bold"><b>B</b></button>
+            <button type="button" data-fmt="italic" title="Italic" aria-label="Italic"><i>I</i></button>
+            <button type="button" data-fmt="strike" title="Strikethrough" aria-label="Strikethrough"><s>S</s></button>
+            <button type="button" data-fmt="mark" title="Highlight" aria-label="Highlight"><mark>H</mark></button>
+            <button type="button" data-fmt="ul" title="Bullets" aria-label="Bullets">•</button>
+            <button type="button" data-fmt="ol" title="Numbered list" aria-label="Numbered list">1.</button>
+            <button type="button" data-fmt="check" title="Checklist" aria-label="Checklist">☑</button>
+            <button type="button" data-fmt="quote" title="Quote" aria-label="Quote">❝</button>
+            <button type="button" data-fmt="link" title="Link" aria-label="Link">🔗</button>
+            <button type="button" data-fmt="math" title="Add up numbers" aria-label="Add up numbers">Σ</button>
+          </span>
+          <button id="note-mode" type="button" class="note-mode">Read</button>
+        </div>
+        <div id="note-math" class="note-math" hidden></div>
+        <div id="note-read" class="note-read" hidden></div>
         <textarea id="note-text" class="note-text" placeholder="Title on the first line, then your note…" aria-label="Note" spellcheck="true"></textarea>
       </section>
     </section>
@@ -338,6 +356,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=21"></script>
+  <script src="app.js?v=22"></script>
 </body>
 </html>
