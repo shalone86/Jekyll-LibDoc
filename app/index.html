@@ -12,7 +12,7 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icon-192.png">
-  <link rel="stylesheet" href="style.css?v=19">
+  <link rel="stylesheet" href="style.css?v=20">
 </head>
 <body>
   <header class="top">
@@ -138,6 +138,30 @@
       <div id="sym-days"></div>
     </section>
 
+    <section id="view-notes" hidden>
+      <section class="card" id="notes-list-pane">
+        <div class="card-head">
+          <h2>Notes</h2>
+          <span id="note-count" class="pill"></span>
+        </div>
+        <div class="add add-top">
+          <input id="note-search" type="search" placeholder="Search notes" autocomplete="off" aria-label="Search notes">
+          <button id="new-note" type="button" aria-label="New note">+</button>
+        </div>
+        <p class="hint">The first line is the title. Share an article or a link to Daily from your browser and it is saved here as text.</p>
+        <ul id="notes" class="list notes"></ul>
+      </section>
+      <section class="card" id="note-pane" hidden>
+        <div class="card-head">
+          <button id="note-back" class="link" type="button">‹ Notes</button>
+          <span id="note-meta" class="pill"></span>
+          <button id="note-delete" class="link" type="button">Delete</button>
+        </div>
+        <p id="note-src" class="hint" hidden></p>
+        <textarea id="note-text" class="note-text" placeholder="Title on the first line, then your note…" aria-label="Note" spellcheck="true"></textarea>
+      </section>
+    </section>
+
     <section id="view-buy" hidden>
       <section class="card">
         <form id="add-buy" class="add add-top buy-form">
@@ -178,6 +202,7 @@
 
   <nav class="tabs" aria-label="Views">
     <button type="button" data-view="today" class="active">Today</button>
+    <button type="button" data-view="notes">Notes</button>
     <button type="button" data-view="albums">Albums</button>
     <button type="button" data-view="projects">Projects</button>
     <button type="button" data-view="buy">To buy<span id="buy-badge" class="badge"></span></button>
@@ -313,6 +338,6 @@
     </form>
   </dialog>
 
-  <script src="app.js?v=19"></script>
+  <script src="app.js?v=20"></script>
 </body>
 </html>

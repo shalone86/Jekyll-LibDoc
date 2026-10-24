@@ -49,9 +49,10 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
  * whenLabel (e.g. 'Spring') and an optional cost.
  * Tasks may also have: cat (category id), parentId (subtask of another task), collapsed (hide its subtasks), remind (ms timestamp to ring the phone) and remindLoud, note ({ id, title }: a
- * link to a note in the Scriptorium notes app).
+ * link to one of the notes).
  * Albums have kind 'album' (music) or 'project' (anything else); both have steps and sessions.
  * categories: { id, name, color, order, retired, updated }
+ * notes: { id, text, tags, src, file, created, updated, removed }   the first line of text is the title
  * Nothing is ever deleted, so two devices can always be merged item by item.
  */
 
@@ -86,6 +87,7 @@ function normalize(d) {
     limits: Array.isArray(d.limits) ? d.limits : [],
     doses: Array.isArray(d.doses) ? d.doses : [],
     categories: Array.isArray(d.categories) ? d.categories : [],
+    notes: Array.isArray(d.notes) ? d.notes : [],
   };
 }
 
@@ -463,9 +465,9 @@ function outdentTask(id) {
   change();
 }
 
-/* ---------- links (task text) and notes (Scriptorium) ---------- */
+/* ---------- links in task text ---------- */
 
-// The notes app lives next to Daily on GitHub Pages.
+// Links to notes made in the old Scriptorium app (before notes moved into Daily).
 const NOTES_APP = location.hostname.endsWith('github.io') ? `${location.origin}/quickstart/` : 'https://shalone86.github.io/quickstart/';
 const noteUrl = (id) => `${NOTES_APP}#/note/${encodeURIComponent(id)}`;
 const URL_RE = /\bhttps?:\/\/[^\s<>"]+[^\s<>".,;:!?)\]'’]/g;
@@ -493,43 +495,284 @@ function linkedText(text) {
   return out;
 }
 
-// Notes from Scriptorium: from this browser if both apps are open here (same site), else from GitHub,
-// where Scriptorium keeps Notes/.scriptorium/db.json in the same repository as Daily.
-async function scriptoriumNotes() {
-  const fromDevice = await notesFromDevice().catch(() => []);
-  if (fromDevice.length) return fromDevice;
-  if (!configured()) throw new Error('Connect GitHub in settings to see your notes here.');
-  const branch = settings.branch || 'main';
-  const res = await fetch(`https://api.github.com/repos/${settings.owner}/${settings.repo}/contents/${encodeURI(settings.notesFolder || 'Notes')}/.scriptorium/db.json?ref=${encodeURIComponent(branch)}`, {
-    headers: { Authorization: `Bearer ${settings.token}`, Accept: 'application/vnd.github.raw', 'X-GitHub-Api-Version': '2022-11-28' }, cache: 'no-store',
-  });
-  if (res.status === 404) throw new Error('No notes found in this repository yet. Turn on GitHub sync in the notes app.');
-  if (!res.ok) throw new Error(`GitHub error ${res.status}`);
-  const db = await res.json();
-  return (db.records && db.records.notes || []).filter((n) => !n.deleted && !n.trashed)
-    .map((n) => ({ id: n.id, title: n.title || 'Untitled', updated: n.updated || 0 })).sort((a, b) => b.updated - a.updated);
+/* ---------- notes ----------
+ * notes: { id, text, tags, src, file, created, updated, removed }
+ * The first line of text is the title. Each note is also written to the repo as Notes/<title>.md
+ * (front matter + text), the same layout the old Scriptorium app used, so existing notes import as they are.
+ */
+
+const noteTitle = (n) => {
+  const line = (n.text || '').split('\n').map((l) => l.replace(/^#+\s*/, '').trim()).find(Boolean);
+  return (line || 'Untitled').slice(0, 80);
+};
+const noteBody = (n) => (n.text || '').split('\n').slice(1).join(' ').replace(/\s+/g, ' ').trim();
+const liveNotes = () => data.notes.filter((n) => !n.removed).sort((a, b) => b.updated - a.updated);
+const shortDay = (ms) => { const d = new Date(ms); return `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`; };
+
+let openNoteId = null;
+let openNoteDraft = null; // a new note that hasn't been typed in yet isn't saved
+let noteQuery = '';
+
+function renderNotes() {
+  const all = liveNotes();
+  $('#note-count').textContent = all.length ? String(all.length) : '';
+  const q = noteQuery.toLowerCase();
+  const hits = q ? all.filter((n) => `${n.text}\n${(n.tags || []).join(' ')}`.toLowerCase().includes(q)) : all;
+  fill($('#notes'), hits.length ? hits.map((n) => el('li', { class: 'item note-item' },
+    el('button', { class: 'note-open', type: 'button', onclick: () => openNote(n.id) },
+      el('span', { class: 'note-name' }, noteTitle(n)),
+      el('span', { class: 'note-date' }, shortDay(n.updated)),
+      noteBody(n) ? el('span', { class: 'note-snip' }, noteBody(n).slice(0, 110)) : null,
+      (n.tags || []).length ? el('span', { class: 'note-tags' }, n.tags.map((t) => el('span', { class: 'note-tag' }, `#${t}`))) : null)))
+    : el('li', { class: 'empty' }, q ? 'No matching notes.' : 'No notes yet. Tap + to write one.'));
 }
-async function notesFromDevice() {
-  if (indexedDB.databases) {
-    const dbs = await indexedDB.databases();
-    if (!dbs.some((d) => d.name === 'scriptorium')) return [];
+
+function openNote(id) {
+  const n = find(data.notes, id) || (openNoteDraft && openNoteDraft.id === id ? openNoteDraft : null);
+  if (!n) return;
+  openNoteId = id;
+  $('#task-dialog').open && $('#task-dialog').close();
+  if ($('#view-notes').hidden) showView('notes');
+  $('#notes-list-pane').hidden = true;
+  $('#note-pane').hidden = false;
+  $('#note-text').value = n.text || '';
+  $('#note-meta').textContent = n.updated ? `Edited ${shortDay(n.updated)}` : 'New';
+  const src = $('#note-src');
+  src.hidden = !n.src;
+  fill(src, n.src ? ['From ', el('a', { href: n.src, target: '_blank', rel: 'noopener' }, shortUrl(n.src))] : []);
+  scrollTo(0, 0);
+}
+
+function closeNote() {
+  const n = find(data.notes, openNoteId);
+  if (n && !(n.text || '').trim()) { touch(n, { removed: true }); change(); }
+  openNoteId = null;
+  openNoteDraft = null;
+  $('#note-pane').hidden = true;
+  $('#notes-list-pane').hidden = false;
+  renderNotes();
+  scrollTo(0, 0);
+}
+
+function newNote(text = '', extra = {}) {
+  const now = Date.now();
+  return { id: uid(), text, tags: [], src: '', file: null, created: now, updated: now, removed: false, ...extra };
+}
+
+function startNote() {
+  openNoteDraft = newNote();
+  openNote(openNoteDraft.id);
+  $('#note-text').focus();
+}
+
+$('#note-text').addEventListener('input', () => {
+  let n = find(data.notes, openNoteId);
+  if (!n && openNoteDraft && openNoteDraft.id === openNoteId) { n = openNoteDraft; data.notes.push(n); openNoteDraft = null; }
+  if (!n) return;
+  touch(n, { text: $('#note-text').value });
+  $('#note-meta').textContent = `Edited ${shortDay(n.updated)}`;
+  change();
+});
+$('#new-note').addEventListener('click', startNote);
+$('#note-back').addEventListener('click', closeNote);
+$('#note-search').addEventListener('input', (e) => { noteQuery = clean(e.target.value); renderNotes(); });
+$('#note-delete').addEventListener('click', () => {
+  const n = find(data.notes, openNoteId);
+  if (n) {
+    touch(n, { removed: true });
+    change();
+    toast('Note deleted', () => { touch(n, { removed: false }); change(); });
   }
-  const db = await new Promise((resolve, reject) => {
-    const req = indexedDB.open('scriptorium');
-    // Never create the notes app's database from here.
-    req.onupgradeneeded = () => req.transaction.abort();
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
+  openNoteId = null;
+  openNoteDraft = null;
+  $('#note-pane').hidden = true;
+  $('#notes-list-pane').hidden = false;
+  renderNotes();
+});
+
+/* ---------- saving shared articles as text ---------- */
+
+// The Android app can fetch a page itself (no browser cross-site limits); elsewhere the page is read through a reader service.
+const pageCalls = new Map();
+window.__pageDone = (id, ok, charset, b64) => {
+  const call = pageCalls.get(id);
+  if (!call) return;
+  pageCalls.delete(id);
+  if (!ok) return call.reject(new Error(b64 || 'Could not load the page'));
   try {
-    if (!db.objectStoreNames.contains('notes')) return [];
-    const notes = await new Promise((resolve, reject) => {
-      const r = db.transaction('notes', 'readonly').objectStore('notes').getAll();
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
-    });
-    return notes.filter((n) => !n.deleted && !n.trashed).map((n) => ({ id: n.id, title: n.title || 'Untitled', updated: n.updated || 0 })).sort((a, b) => b.updated - a.updated);
-  } finally { db.close(); }
+    const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+    let label = charset || (/charset=["']?([\w-]+)/i.exec(new TextDecoder('latin1').decode(bytes.slice(0, 2048))) || [])[1] || 'utf-8';
+    let html;
+    try { html = new TextDecoder(label).decode(bytes); } catch { html = new TextDecoder('utf-8').decode(bytes); }
+    call.resolve(html);
+  } catch (err) { call.reject(err); }
+};
+function nativeFetch(url) {
+  return new Promise((resolve, reject) => {
+    const id = uid();
+    pageCalls.set(id, { resolve, reject });
+    window.AndroidApp.fetchPage(url, id);
+    setTimeout(() => { if (pageCalls.delete(id)) reject(new Error('The page took too long to load')); }, 30000);
+  });
+}
+
+const ARTICLE_JUNK = /^(advertisement|ad|sponsored|read more|read next|related( stories| articles| coverage| content)?|more from|recommended|see also|also read|most read|trending|watch:?|listen:?|sign up|subscribe|get the newsletter|newsletter|follow us|share( this)?( article| story)?|click here|copy link|comments?|image credit|getty images|tags?:|topics?:|cookie|we use cookies|accept all)\b/i;
+
+// Pulls the readable text out of a web page: title, site, and the article body as plain paragraphs.
+function extractArticle(html, url) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const meta = (sel) => (doc.querySelector(sel) || {}).content || '';
+  const host = new URL(url).hostname.replace(/^www\./, '');
+  const site = clean(meta('meta[property="og:site_name"]')) || host;
+  let title = clean(meta('meta[property="og:title"]') || (doc.querySelector('h1') || {}).textContent || doc.title || '');
+  const m = title.match(/^(.{12,}?)\s+[|–—·-]\s+([^|–—·]{2,60})$/);
+  if (m && (m[2].toLowerCase().includes(site.toLowerCase().slice(0, 8)) || site.toLowerCase().includes(m[2].toLowerCase()))) title = m[1];
+  const byline = clean(meta('meta[name="author"]') || meta('meta[property="article:author"]'));
+  doc.querySelectorAll('script, style, noscript, nav, aside, footer, header, form, button, iframe, svg, figure, [role="navigation"], [aria-hidden="true"]').forEach((e) => e.remove());
+
+  const textOf = (e) => e.textContent.replace(/\s+/g, ' ').trim();
+  const score = (c) => [...c.querySelectorAll('p')].reduce((n, p) => { const t = textOf(p).length; return n + (t >= 40 ? t : 0); }, 0);
+  const cands = [...doc.querySelectorAll('article, main, [itemprop="articleBody"], [class*="article-body"], [class*="story-body"], [class*="post-content"], [class*="entry-content"], [class*="article-content"]'), doc.body].filter(Boolean);
+  const scored = cands.map((c) => ({ c, s: score(c) }));
+  const best = Math.max(...scored.map((x) => x.s));
+  const pick = scored.filter((x) => x.s >= best * 0.85).sort((a, b) => a.c.textContent.length - b.c.textContent.length)[0].c;
+
+  const lines = [];
+  for (const b of pick.querySelectorAll('h2, h3, h4, p, li, blockquote')) {
+    if (b.tagName === 'BLOCKQUOTE' && b.querySelector('p')) continue;
+    const t = textOf(b);
+    if (!t) continue;
+    const links = [...b.querySelectorAll('a')].reduce((n, a) => n + textOf(a).length, 0);
+    if (links / t.length > 0.6 && t.length < 200) continue;
+    if (t.length < 120 && ARTICLE_JUNK.test(t)) continue;
+    const tag = b.tagName;
+    if (/^H/.test(tag)) lines.push(`## ${t}`);
+    else if (tag === 'LI') { if (t.length >= 30) lines.push(`- ${t}`); }
+    else if (tag === 'BLOCKQUOTE') lines.push(`> ${t}`);
+    else if (t.length >= 25 || /[.!?"”]$/.test(t)) lines.push(t);
+  }
+  const body = lines.filter((l, i) => l !== lines[i - 1]).join('\n\n');
+  if (body.length < 400) throw new Error('No article text found on that page');
+  return { title, site, byline, body };
+}
+
+async function readerArticle(url) {
+  const res = await fetch(`https://r.jina.ai/${url}`, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Reader service ${res.status}`);
+  const j = await res.json();
+  const d = j.data || j;
+  const body = String(d.content || '').replace(/!\[[^\]]*\]\([^)]*\)/g, '').replace(/\[([^\]]+)\]\([^)]*\)/g, '$1').replace(/\n{3,}/g, '\n\n').trim();
+  if (body.length < 400) throw new Error('No article text found on that page');
+  return { title: clean(d.title || ''), site: new URL(url).hostname.replace(/^www\./, ''), byline: '', body };
+}
+
+async function fetchArticleText(url) {
+  const errors = [];
+  const attempts = [];
+  if (window.AndroidApp && window.AndroidApp.fetchPage) attempts.push(async () => extractArticle(await nativeFetch(url), url));
+  else attempts.push(async () => { const r = await fetch(url); if (!r.ok) throw new Error(String(r.status)); return extractArticle(await r.text(), url); });
+  attempts.push(() => readerArticle(url));
+  for (const run of attempts) {
+    try { return await run(); } catch (err) { errors.push(err.message); }
+  }
+  throw new Error(errors.join('; '));
+}
+
+const articleText = (a, url) => [a.title, [a.byline, a.site].filter(Boolean).join(' · ') + ` · ${url}`, a.body].join('\n\n');
+
+// Something shared to Daily from another app or the browser: a link becomes a saved article, plain text becomes a note.
+async function receiveShare({ title = '', text = '', url = '' } = {}) {
+  title = clean(title);
+  text = String(text || '').trim();
+  const link = url || (text.match(URL_RE) || [])[0] || '';
+  showView('notes');
+  if (!link) {
+    const n = newNote([title, text].filter(Boolean).join('\n\n'));
+    data.notes.push(n);
+    change();
+    toast('Saved to Notes');
+    return;
+  }
+  const rest = text.replace(link, '').trim();
+  const n = newNote(`${title || rest || link}\n\n${link}`, { src: link });
+  data.notes.push(n);
+  change();
+  toast('Saving the article…', null, 30000);
+  const started = n.updated;
+  try {
+    const art = await fetchArticleText(link);
+    if (n.updated !== started || n.removed) { toast('Saved the link (you edited the note, so the article was not added)'); return; }
+    touch(n, { text: articleText(art, link) });
+    change();
+    if (openNoteId === n.id) $('#note-text').value = n.text;
+    toast('Article saved to Notes');
+  } catch (err) {
+    toast('Saved the link, but could not read the article', null, 8000);
+  }
+}
+window.receiveShare = receiveShare;
+
+// Chrome's "install app" share target sends ?share=1&title=…&text=…&url=…
+(() => {
+  const p = new URLSearchParams(location.search);
+  if (!p.has('share')) return;
+  history.replaceState(null, '', location.pathname);
+  setTimeout(() => receiveShare({ title: p.get('title') || '', text: p.get('text') || '', url: p.get('url') || '' }), 300);
+})();
+
+// Reads the Notes/*.md files the old Scriptorium app left in the repo (once) so nothing is lost.
+async function importOldNotes(remote) {
+  const dir = (settings.notesFolder || 'Notes').replace(/^\/+|\/+$/g, '');
+  const paths = [...remote.keys()].filter((p) => p.startsWith(`${dir}/`) && p.endsWith('.md') && !p.slice(dir.length + 1).includes('/'));
+  let added = 0;
+  for (const path of paths) {
+    const blob = await gh(`/git/blobs/${remote.get(path)}`);
+    const raw = fromBase64(blob.content);
+    const m = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+    const fm = {};
+    for (const line of (m ? m[1] : '').split(/\r?\n/)) { const i = line.indexOf(':'); if (i > 0) fm[line.slice(0, i).trim()] = line.slice(i + 1).trim(); }
+    const id = fm.id || `import-${path}`;
+    if (find(data.notes, id)) continue;
+    let tags = [];
+    try { tags = JSON.parse(fm.tags || '[]'); } catch { /* ignore */ }
+    const created = Date.parse(fm.created) || Date.now();
+    data.notes.push(newNote((m ? m[2] : raw).replace(/\n+$/, ''), { id, tags, file: path, created, updated: Date.parse(fm.updated) || created }));
+    added++;
+  }
+  return added;
+}
+
+// A task's linked note: opens in the Notes tab (or the old Scriptorium app if it never made it across).
+function noteChip(link) {
+  const live = find(data.notes, link.id);
+  return el('a', {
+    class: 'note-chip', href: live ? '#' : noteUrl(link.id), target: live ? null : '_blank', rel: 'noopener', title: 'Open the note',
+    onclick: live ? (e) => { e.preventDefault(); openNote(link.id); } : null,
+  }, `📝 ${live ? noteTitle(live) : link.title}`);
+}
+
+// Notes → markdown files. Renamed or deleted notes leave their old file behind in `staleNoteFiles` for the sync to remove.
+let staleNoteFiles = [];
+function noteFiles() {
+  const dir = (settings.notesFolder || 'Notes').replace(/^\/+|\/+$/g, '');
+  const files = {};
+  staleNoteFiles = [];
+  for (const n of [...data.notes].sort((a, b) => a.created - b.created)) {
+    if (n.removed) {
+      if (n.file) { staleNoteFiles.push(n.file); n.file = null; }
+      continue;
+    }
+    let path = `${dir}/${fileSafe(noteTitle(n))}.md`;
+    for (let i = 2; path in files; i++) path = `${dir}/${fileSafe(noteTitle(n))} (${i}).md`;
+    if (n.file && n.file !== path) staleNoteFiles.push(n.file);
+    n.file = path;
+    const head = ['---', `id: ${n.id}`, `created: ${new Date(n.created).toISOString()}`, `updated: ${new Date(n.updated).toISOString()}`];
+    if ((n.tags || []).length) head.push(`tags: ${JSON.stringify(n.tags)}`);
+    if (n.src) head.push(`source: ${n.src}`);
+    head.push('---');
+    files[path] = `${head.join('\n')}\n${(n.text || '').replace(/\s+$/, '')}\n`;
+  }
+  return files;
 }
 
 /* ---------- albums ---------- */
@@ -832,6 +1075,7 @@ function mergeData(local, remote) {
     limits: mergeById(local.limits, remote.limits, newer),
     doses: mergeById(local.doses, remote.doses, newer),
     categories: mergeById(local.categories, remote.categories, newer),
+    notes: mergeById(local.notes, remote.notes, newer),
   };
 }
 
@@ -918,9 +1162,11 @@ function repoPath(name) {
 }
 
 function buildFiles() {
+  const notes = noteFiles(); // first: it records where each note's file went, which data.json carries
   const files = {
     [repoPath('data.json')]: JSON.stringify(data, null, 2) + '\n',
     [repoPath('Todo.md')]: todoMarkdown(),
+    ...notes,
   };
   for (const [day, entry] of archiveByDay()) files[repoPath(`Archive/${day}.md`)] = archiveMarkdown(day, entry);
   const { byDay } = symptomReport('0000-00-00', '9999-99-99');
@@ -1030,6 +1276,12 @@ async function syncOnce() {
     }
   }
 
+  if (!store.get('notesImported', false)) {
+    const added = await importOldNotes(remote);
+    store.set('notesImported', true);
+    if (added) { store.set('data', data); render(); }
+  }
+
   const files = buildFiles();
   const changes = [];
   for (const [path, content] of Object.entries(files)) {
@@ -1042,6 +1294,10 @@ async function syncOnce() {
     if (generated && !(path in files)) {
       changes.push({ path, mode: '100644', type: 'blob', sha: null });
     }
+  }
+
+  for (const path of staleNoteFiles) {
+    if (remote.has(path) && !(path in files)) changes.push({ path, mode: '100644', type: 'blob', sha: null });
   }
 
   let newHead = ref.object.sha;
@@ -1163,7 +1419,7 @@ const fingerDown = () => pointerDownAt && Date.now() - pointerDownAt < 3000;
 
 function render() {
   if (dragging || fingerDown()) { renderPending = true; return; }
-  if (document.activeElement && document.activeElement.matches('.text, .cost, .limit-amount')) {
+  if (document.activeElement && document.activeElement.matches('.text, .cost, .limit-amount, .note-text')) {
     // Don't yank a line out from under someone who is typing; re-render when they finish.
     renderPending = true;
     return;
@@ -1181,6 +1437,7 @@ function render() {
   renderLimits();
   renderArchive();
   renderSymptomLog();
+  renderNotes();
   syncReminders();
 }
 
@@ -1322,7 +1579,7 @@ function taskRow(t) {
         title: hidden ? 'Show subtasks' : 'Hide subtasks',
         onclick: () => { touch(t, { collapsed: !hidden }); change(); },
       }, el('span', { class: 'caret', 'aria-hidden': 'true' }, hidden ? '▸' : '▾'), ` ${plural(kids.length, 'subtask')}`) : null,
-      t.note ? el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener', title: 'Open in your notes' }, `📝 ${t.note.title}`) : null,
+      t.note ? noteChip(t.note) : null,
       t.remind ? el('button', {
         class: `remind-chip${t.remind < Date.now() ? ' over' : ''}`, type: 'button', title: 'Change the reminder', onclick: () => openTaskDialog(t.id),
       }, `⏰ ${remindText(t.remind)}`) : null),
@@ -1806,7 +2063,6 @@ function renderSessionChoices() {
 let taskDialogId = null;
 let notePicking = false;
 let remindPicking = false;
-let noteList = null;
 
 function openTaskDialog(id) {
   taskDialogId = id;
@@ -1885,7 +2141,7 @@ function renderNotePicker(t) {
   const box = $('#task-note');
   if (t.note && !notePicking) {
     fill(box, el('div', { class: 'note-row' },
-      el('a', { class: 'note-chip', href: noteUrl(t.note.id), target: '_blank', rel: 'noopener' }, `📝 ${t.note.title}`),
+      noteChip(t.note),
       el('button', { class: 'small-btn', type: 'button', onclick: () => { notePicking = true; renderNotePicker(t); } }, 'Change'),
       el('button', { class: 'small-btn', type: 'button', onclick: () => { touch(t, { note: null }); change(); renderTaskDialog(); } }, 'Remove')));
     return;
@@ -1895,20 +2151,18 @@ function renderNotePicker(t) {
     return;
   }
   const input = el('input', { class: 'note-search', placeholder: 'Search your notes', autocomplete: 'off', 'aria-label': 'Search notes' });
-  const list = el('ul', { class: 'list plain note-results' }, el('li', { class: 'empty' }, 'Loading your notes…'));
+  const list = el('ul', { class: 'list plain note-results' });
   const draw = () => {
-    if (!Array.isArray(noteList)) return;
     const q = clean(input.value).toLowerCase();
-    const hits = noteList.filter((n) => !q || n.title.toLowerCase().includes(q)).slice(0, 30);
+    const hits = liveNotes().filter((n) => !q || noteTitle(n).toLowerCase().includes(q)).slice(0, 30);
     fill(list, hits.length ? hits.map((n) => el('li', { class: 'item' },
-      el('button', { class: 'note-pick', type: 'button', onclick: () => { touch(t, { note: { id: n.id, title: n.title } }); notePicking = false; change(); renderTaskDialog(); } }, `📝 ${n.title}`)))
-      : el('li', { class: 'empty' }, q ? 'No matching notes.' : 'No notes yet.'));
+      el('button', { class: 'note-pick', type: 'button', onclick: () => { touch(t, { note: { id: n.id, title: noteTitle(n) } }); notePicking = false; change(); renderTaskDialog(); } }, `📝 ${noteTitle(n)}`)))
+      : el('li', { class: 'empty' }, q ? 'No matching notes.' : 'No notes yet. Add one in the Notes tab.'));
   };
   input.addEventListener('input', draw);
   fill(box, input, list);
+  draw();
   input.focus();
-  scriptoriumNotes().then((notes) => { noteList = notes; draw(); })
-    .catch((err) => fill(list, el('li', { class: 'empty' }, err.message)));
 }
 
 function openCatDialog() {
@@ -2065,10 +2319,10 @@ $('#backfill-day').addEventListener('change', (e) => {
 $('#edit-habits').addEventListener('click', () => { editingHabits = !editingHabits; render(); });
 
 document.addEventListener('focusout', (e) => {
-  if (e.target.matches && e.target.matches('.text, .cost, .limit-amount') && renderPending) setTimeout(render);
+  if (e.target.matches && e.target.matches('.text, .cost, .limit-amount, .note-text') && renderPending) setTimeout(render);
 });
 
-const VIEWS = { today: 'Today', albums: 'Albums', projects: 'Projects', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
+const VIEWS = { today: 'Today', notes: 'Notes', albums: 'Albums', projects: 'Projects', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
 function showView(view) {
   for (const b of document.querySelectorAll('.tabs button')) {
     b.classList.toggle('active', b.dataset.view === view);
@@ -2084,6 +2338,7 @@ for (const btn of document.querySelectorAll('.tabs button')) btn.addEventListene
 window.handleBack = () => {
   const open = document.querySelector('dialog[open]');
   if (open) { open.close(); return true; }
+  if (openNoteId) { closeNote(); return true; }
   if ($('#view-today').hidden) { showView('today'); return true; }
   return false;
 };
