@@ -2,7 +2,7 @@
   "id": "./",
   "name": "Daily",
   "short_name": "Daily",
-  "description": "Daily habits and a to-do list, backed up to GitHub.",
+  "description": "Daily habits, a to-do list and notes, backed up to GitHub.",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
@@ -30,5 +30,10 @@
       "sizes": "any",
       "type": "image/svg+xml"
     }
-  ]
+  ],
+  "share_target": {
+    "action": "./?share=1",
+    "method": "GET",
+    "params": { "title": "title", "text": "text", "url": "url" }
+  }
 }

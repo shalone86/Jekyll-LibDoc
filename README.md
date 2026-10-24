@@ -5,11 +5,12 @@ A small to-do app for your phone that backs everything up to a GitHub repository
 - **Daily:** habits that reset every morning. Each check adds to that habit's total and streak.
 - **To do:** one-off tasks. When you check a task, it moves to the archive. Nothing is ever deleted.
   - **Categories:** color-code tasks (Church, Groceries, Basic, or your own). Tap a category chip to see only those tasks; tasks you add while it's selected go into it. ✎ adds, renames or recolors categories.
-  - **⋯ on any task:** set its category, add **subtasks** (or make it a subtask of the task above), and **link a note** from the Scriptorium notes app. The 📝 link opens that note.
+  - **⋯ on any task:** set its category, add **subtasks** (or make it a subtask of the task above), and **link a note**. The 📝 link opens that note in the Notes tab.
   - **Links** in a task show as short, tappable links (like `vc.va.gov/…`). Tap the text next to them to edit.
 - **Jump bar:** Daily · To do · Symptoms · Limits at the top of Today, so a long list doesn't hide the rest.
 - **Symptoms today:** choose mild, moderate or acute, then tap a symptom from the list (or type a new one, which then joins the list). Log it again each time it happens. You can add a note to any entry, and they clear from the Today screen at midnight.
 - **Symptoms tab:** a summary and day-by-day log for any date range, with a large-text **Read to doctor** view, **Share .txt** (email, messages, …) and **Copy**.
+- **Notes tab:** plain notes with search. The first line is the title. **Share** a link or text from your browser or any app to Daily and it is saved here; for a link the app reads the article and saves its text (and keeps the link). Notes you made in the old Scriptorium app are imported once, the first time Daily syncs.
 - **Albums tab:** one card per album you're working on, each with its own step list, a session log and a "last worked on" date. Albums untouched for 2 weeks show a 💤 reminder on Today.
 - **Projects tab:** the same as albums, for anything that isn't music.
 - **Finished** albums and projects go straight to the Archive (with Undo), where you can reopen them.
@@ -32,6 +33,8 @@ Todo/
   Symptoms/2026-09-24.md  symptoms logged that day
   Albums/Night Drives.md  an album's steps and session log
   Projects/Church AV.md   a project's steps and session log
+Notes/
+  My note title.md        one file per note (front matter + text), next to the Todo folder
 ```
 
 The `.md` files are plain Obsidian-style checklists. If your Obsidian vault is in that repository (for example through the Obsidian Git plugin), set the app's **Folder** to a folder inside the vault. The app writes those files, so edit your lists in the app rather than in Obsidian; edits made in Obsidian get overwritten.
