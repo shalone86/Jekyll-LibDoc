@@ -318,8 +318,26 @@ function parseReminder(raw, nowDate = new Date()) {
   return { text: out || text.trim(), at };
 }
 
+// "buy lamp $40" (or "buy lamp 40", "buy lamp 40 dollars") → { text: 'lamp', cost: 40 }; null without a price.
+function parseBuy(raw) {
+  const m = /^\s*buy\s+(.+)$/i.exec(raw);
+  if (!m) return null;
+  const rest = m[1];
+  const price = /\$\s?(\d[\d,]*(?:\.\d+)?)|(\d[\d,]*(?:\.\d+)?)\s*(?:dollars?|bucks)\b|(?:^|\s)(\d[\d,]*(?:\.\d{1,2})?)\s*$/i.exec(rest);
+  if (!price) return null;
+  const cost = Number((price[1] || price[2] || price[3]).replace(/,/g, ''));
+  const text = clean((rest.slice(0, price.index) + ' ' + rest.slice(price.index + price[0].length)).replace(/\s+(for|at|around|about)\s*$/i, ''));
+  return text && cost > 0 ? { text, cost } : null;
+}
+
 // Adds a task; if the text says when ("movie Friday 4:15pm") it also sets that reminder.
 function addTaskSmart(raw, albumId = null, extra = {}) {
+  const b = !albumId && !extra.parentId && parseBuy(raw);
+  if (b) {
+    const item = addBuy(b.text, 'someday', b.cost);
+    toast(`🛒 “${b.text}” (${money(b.cost)}) added to To buy · Someday`, () => { data.tasks = data.tasks.filter((x) => x.id !== item.id); change(); });
+    return null;
+  }
   const r = parseReminder(raw);
   if (!r) return addTask(raw, albumId, extra);
   const t = addTask(r.text, albumId, { ...extra, remind: r.at, remindLoud: false });
@@ -901,8 +919,10 @@ function parseCost(text) {
 
 function addBuy(text, when, cost) {
   const now = Date.now();
-  data.tasks.push({ id: uid(), text, buy: true, ...parseWhen(when), cost, order: now, created: now, doneAt: null, doneDay: null, updated: now });
+  const t = { id: uid(), text, buy: true, ...parseWhen(when), cost, order: now, created: now, doneAt: null, doneDay: null, updated: now };
+  data.tasks.push(t);
   change();
+  return t;
 }
 function snoozeBuy(id) {
   const t = find(data.tasks, id);
@@ -2284,6 +2304,8 @@ function bindAdd(form, add) {
 bindAdd($('#add-task'), (text) => { addTaskSmart(text, null, { cat: todoFilter }); $('#task-hint').hidden = true; });
 // Show what it understood as you type, so you can see the reminder before adding.
 $('#add-task').text.addEventListener('input', () => {
+  const b = parseBuy($('#add-task').text.value);
+  if (b) { $('#task-hint').hidden = false; $('#task-hint').textContent = `🛒 Goes to To buy · Someday: “${b.text}” ${money(b.cost)}`; return; }
   const r = parseReminder($('#add-task').text.value);
   $('#task-hint').hidden = !r;
   if (r) $('#task-hint').textContent = `⏰ Reminder: ${remindText(r.at)} — “${r.text}”`;
