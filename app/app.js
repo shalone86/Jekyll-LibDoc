@@ -215,13 +215,15 @@ function parseReminder(raw, nowDate = new Date()) {
   const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 
   // "in 2 hours", "in half an hour", "in 3 days"
-  const rel = take(/\bin\s+(half an?|an?|\d+(?:\.\d+)?)\s*(min(?:ute)?s?|hrs?|hours?|days?|weeks?)\b/i);
+  const rel = take(/\bin\s+(half an?|an?|\d+(?:\.\d+)?)\s*(min(?:ute)?s?|hrs?|hours?|days?|weeks?|months?)\b/i);
   let relMs = null;
   let relDays = 0;
+  let relMonths = 0;
   if (rel) {
     const n = /half/i.test(rel[1]) ? 0.5 : /^an?$/i.test(rel[1]) ? 1 : parseFloat(rel[1]);
     const unit = rel[2].toLowerCase();
-    if (unit.startsWith('m')) relMs = n * 60000;
+    if (unit.startsWith('mo')) relMonths = Math.max(1, Math.round(n));
+    else if (unit.startsWith('m')) relMs = n * 60000;
     else if (unit.startsWith('h')) relMs = n * 3600000;
     else relDays = Math.round(n * (unit.startsWith('w') ? 7 : 1));
   }
@@ -293,9 +295,9 @@ function parseReminder(raw, nowDate = new Date()) {
   let at;
   if (relMs != null) {
     at = now.getTime() + relMs;
-  } else if (relDays) {
+  } else if (relDays || relMonths) {
     const d = startOfDay(now);
-    d.setDate(d.getDate() + relDays);
+    if (relMonths) d.setMonth(d.getMonth() + relMonths); else d.setDate(d.getDate() + relDays);
     d.setHours(hm ? hm[0] : 9, hm ? hm[1] : 0, 0, 0);
     at = d.getTime();
   } else if (hm || (day && /tomorrow|tmrw|tmr/i.test(text))) {
@@ -306,7 +308,7 @@ function parseReminder(raw, nowDate = new Date()) {
   } else {
     return null;
   }
-  if (!explicit && !hm && relMs == null && !relDays) return null;
+  if (!explicit && !hm && relMs == null && !relDays && !relMonths) return null;
   if (at <= now.getTime()) return null;
 
   // the task is what's left once the time words are taken out
@@ -316,6 +318,31 @@ function parseReminder(raw, nowDate = new Date()) {
     .replace(/^(?:(?:at|on|by|for|around|this|next|in|@|-|,|:)\s+)+/i, '')
     .replace(/(?:\s+(?:at|on|by|for|around|this|next|in|@|-|,|:))+$/i, '').trim();
   return { text: out || text.trim(), at };
+}
+
+// 9 AM, this many days/weeks/months from now: the time the quick reminder options use.
+function fromNow(n, unit, nowDate = new Date()) {
+  const d = new Date(nowDate);
+  d.setHours(9, 0, 0, 0);
+  if (unit.startsWith('mo')) d.setMonth(d.getMonth() + n);
+  else d.setDate(d.getDate() + n * (unit.startsWith('w') ? 7 : 1));
+  return d.getTime();
+}
+const NUM_WORDS = { a: 1, an: 1, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, couple: 2, few: 3 };
+
+// A loose "2 weeks", "three days", "a month" or "next week" in a task isn't a firm time, so the app only offers a reminder.
+// Returns { at, label } or null.
+function parseVagueWhen(raw, nowDate = new Date()) {
+  const text = String(raw);
+  let m = /\bnext\s+(week|month)\b/i.exec(text);
+  if (m) return { at: fromNow(1, m[1].toLowerCase()), label: `next ${m[1].toLowerCase()}` };
+  m = /\b(\d{1,3}|a|an|one|two|three|four|five|six|seven|eight|nine|ten|couple of|few)\s+(days?|weeks?|months?)\b/i.exec(text);
+  if (!m) return null;
+  const w = m[1].toLowerCase().replace(/ of$/, '');
+  const n = /^\d/.test(w) ? parseInt(w, 10) : NUM_WORDS[w];
+  if (!n || n > 365) return null;
+  const unit = m[2].toLowerCase().replace(/s$/, '');
+  return { at: fromNow(n, unit, nowDate), label: `${n === 1 ? (w === 'a' || w === 'an' ? 'a' : '1') : n} ${unit}${n === 1 ? '' : 's'}` };
 }
 
 // "buy lamp $40" (or "buy lamp 40", "buy lamp 40 dollars") → { text: 'lamp', cost: 40 }; null without a price.
@@ -339,7 +366,12 @@ function addTaskSmart(raw, albumId = null, extra = {}) {
     return null;
   }
   const r = parseReminder(raw);
-  if (!r) return addTask(raw, albumId, extra);
+  if (!r) {
+    const t = addTask(raw, albumId, extra);
+    const v = parseVagueWhen(raw);
+    if (v) toast(`Remind you in ${v.label}? (${remindText(v.at)})`, () => { setReminder(t.id, v.at); }, 9000, 'Remind me');
+    return t;
+  }
   const t = addTask(r.text, albumId, { ...extra, remind: r.at, remindLoud: false });
   toast(`⏰ “${r.text}” — ${remindText(r.at)}`, () => { touch(t, { text: raw, remind: null }); change(); });
   const bridge = window.AndroidApp;
@@ -2306,11 +2338,21 @@ function renderRemindPicker(t) {
   const at = (days, hour) => { const d = new Date(); d.setDate(d.getDate() + days); d.setHours(hour, 0, 0, 0); return d.getTime(); };
   const soon = Date.now() + 3600000;
   const input = el('input', { type: 'datetime-local', class: 'remind-input', value: localInput(Math.ceil(soon / 900000) * 900000), 'aria-label': 'Day and time' });
+  const countInput = el('input', { type: 'number', min: '1', max: '365', inputmode: 'numeric', value: '3', class: 'remind-count', 'aria-label': 'How many' });
+  const unitSelect = el('select', { 'aria-label': 'Days, weeks or months' }, el('option', { value: 'day' }, 'days'), el('option', { value: 'week' }, 'weeks'), el('option', { value: 'month' }, 'months'));
   fill(box,
     el('div', { class: 'chips' },
       el('button', { class: 'chip', type: 'button', onclick: () => pick(Date.now() + 3600000) }, 'In 1 hour'),
       new Date().getHours() < 17 ? el('button', { class: 'chip', type: 'button', onclick: () => pick(at(0, 18)) }, 'This evening') : null,
-      el('button', { class: 'chip', type: 'button', onclick: () => pick(at(1, 9)) }, 'Tomorrow 9 AM')),
+      el('button', { class: 'chip', type: 'button', onclick: () => pick(at(1, 9)) }, 'Tomorrow 9 AM'),
+      el('button', { class: 'chip', type: 'button', onclick: () => pick(fromNow(1, 'week')) }, 'Next week'),
+      el('button', { class: 'chip', type: 'button', onclick: () => pick(fromNow(2, 'week')) }, 'In 2 weeks'),
+      el('button', { class: 'chip', type: 'button', onclick: () => pick(fromNow(1, 'month')) }, 'In a month')),
+    el('div', { class: 'add in-n' }, el('span', { class: 'in-label' }, 'In'), countInput, unitSelect,
+      el('button', {
+        type: 'button', 'aria-label': 'Set reminder after this long',
+        onclick: () => { const n = parseInt(countInput.value, 10); if (n > 0) pick(fromNow(n, unitSelect.value)); },
+      }, '✓')),
     el('div', { class: 'add' }, input,
       el('button', {
         type: 'button', 'aria-label': 'Set reminder',
@@ -2436,8 +2478,9 @@ function enableDrag(list, onDrop) {
 
 let toastTimer = null;
 let toastUndo = null;
-function toast(text, undo, ms = 5000) {
+function toast(text, undo, ms = 5000, label = 'Undo') {
   $('#toast-text').textContent = text;
+  $('#toast-undo').textContent = label;
   toastUndo = undo;
   $('#toast-undo').hidden = !undo;
   $('#toast').hidden = false;
@@ -2469,6 +2512,8 @@ $('#add-task').text.addEventListener('input', () => {
   const b = parseBuy($('#add-task').text.value);
   if (b) { $('#task-hint').hidden = false; $('#task-hint').textContent = `🛒 Goes to To buy · Someday: “${b.text}” ${money(b.cost)}`; return; }
   const r = parseReminder($('#add-task').text.value);
+  const v = !r && parseVagueWhen($('#add-task').text.value);
+  if (v) { $('#task-hint').hidden = false; $('#task-hint').textContent = `⏰ I'll offer a reminder in ${v.label}`; return; }
   $('#task-hint').hidden = !r;
   if (r) $('#task-hint').textContent = `⏰ Reminder: ${remindText(r.at)} — “${r.text}”`;
 });
