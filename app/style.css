@@ -481,3 +481,8 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 .note-read li.done { color: var(--muted); text-decoration: line-through; }
 .note-check { width: 18px; height: 18px; margin: 0 8px 0 0; vertical-align: -3px; accent-color: var(--accent); }
 .note-read img { max-width: 100%; }
+
+.in-n { align-items: center; margin: 8px 0; }
+.in-n .in-label { color: var(--muted); }
+.in-n .remind-count { flex: none; width: 64px; }
+.in-n select { flex: 1; }
