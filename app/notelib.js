@@ -331,3 +331,154 @@ export function mdInline(s, ctx = {}) {
   t = t.replace(/(^|[\s(])(https?:\/\/[^\s<)]+[^\s<).,;:!?'"])/g, (_, pre, u) => `${pre}<a href="${u}" target="_blank" rel="noopener noreferrer">${u}</a>`);
   return t.replace(/\u0000(\d+)\u0000/g, (_, n) => tokens[+n]);
 }
+
+/* ---------- HTML → Markdown (what the editor saves) ---------- */
+/**
+ * Note HTML → Markdown.
+ * ctx.attFile(id) → filename for an attachment, ctx.noteTitle(id) → title for note links.
+ */
+export function htmlToMarkdown(html, ctx = {}) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html || '';
+  const out = blocks(tpl.content, ctx, 0).replace(/\n{3,}/g, '\n\n').trim();
+  return out + '\n';
+}
+
+function blocks(parent, ctx, depth) {
+  let out = '';
+  let inlineBuf = '';
+  const flush = () => { if (inlineBuf.trim()) out += inlineBuf.trim() + '\n\n'; inlineBuf = ''; };
+  for (const n of Array.from(parent.childNodes)) {
+    if (n.nodeType === 3) { inlineBuf += inlineText(n.nodeValue); continue; }
+    if (n.nodeType !== 1) continue;
+    const tag = n.tagName;
+    const align = n.style?.textAlign;
+    const wrapAlign = (md) => (align && align !== 'left' && align !== 'start' ? `<div align="${align}">\n\n${md.trim()}\n\n</div>\n\n` : md);
+    switch (tag) {
+      case 'H1': case 'H2': case 'H3': case 'H4':
+        flush(); out += wrapAlign(`${'#'.repeat(+tag[1])} ${inline(n, ctx).trim()}\n\n`); break;
+      case 'P':
+        flush(); { const t = inline(n, ctx).trim(); out += wrapAlign(t ? t + '\n\n' : '\n'); } break;
+      case 'DIV':
+        flush();
+        if (n.classList.contains('audio-block')) { out += embed(n.dataset.att, ctx) + '\n\n'; break; }
+        if (hasBlockChild(n)) out += wrapAlign(blocks(n, ctx, depth));
+        else { const t = inline(n, ctx).trim(); out += wrapAlign(t ? t + '\n\n' : '\n'); }
+        break;
+      case 'UL': case 'OL':
+        flush(); out += list(n, ctx, 0) + '\n'; break;
+      case 'BLOCKQUOTE':
+        flush(); out += blocks(n, ctx, depth).trim().split('\n').map((l) => `> ${l}`.trimEnd()).join('\n') + '\n\n'; break;
+      case 'PRE':
+        flush(); out += '```\n' + n.textContent.replace(/\n$/, '') + '\n```\n\n'; break;
+      case 'HR':
+        flush(); out += '---\n\n'; break;
+      case 'FIGURE':
+        flush(); out += inline(n, ctx).trim() + '\n\n'; break;
+      case 'TABLE':
+        flush(); out += table(n, ctx) + '\n\n'; break;
+      case 'BR':
+        inlineBuf += '\n'; break;
+      default:
+        inlineBuf += inline(n, ctx, true);
+    }
+  }
+  flush();
+  return out;
+}
+
+const BLOCK_TAGS = /^(P|DIV|H[1-6]|UL|OL|BLOCKQUOTE|PRE|HR|FIGURE|TABLE)$/;
+function hasBlockChild(el) { return Array.from(el.children).some((c) => BLOCK_TAGS.test(c.tagName)); }
+
+function inlineText(s) {
+  s = s.replace(/\u200b/g, '').replace(/([`\\])/g, '\\$1').replace(/\s+/g, ' ');
+  // Only escape characters that could pair up into formatting, so "12*4" stays readable in the file.
+  for (const ch of ['*', '_', '~']) if (s.split(ch).length > 2) s = s.split(ch).join(`\\${ch}`);
+  s = s.replace(/==/g, '\\=\\=');
+  if (/\[[^\]]*\]/.test(s)) s = s.replace(/([[\]])/g, '\\$1');
+  return s;
+}
+
+function embed(id, ctx) {
+  const f = ctx.attFile ? ctx.attFile(id) : id;
+  return `![[${f}]]`;
+}
+
+function inline(el, ctx, self = false) {
+  const parts = [];
+  const nodes = self ? [el] : Array.from(el.childNodes);
+  for (const n of nodes) {
+    if (n.nodeType === 3) { parts.push(inlineText(n.nodeValue)); continue; }
+    if (n.nodeType !== 1) continue;
+    const inner = () => inline(n, ctx);
+    switch (n.tagName) {
+      case 'B': case 'STRONG': parts.push(wrapMark('**', inner())); break;
+      case 'I': case 'EM': parts.push(wrapMark('*', inner())); break;
+      case 'U': parts.push(`<u>${inner()}</u>`); break;
+      case 'S': case 'DEL': case 'STRIKE': parts.push(wrapMark('~~', inner())); break;
+      case 'MARK': parts.push(wrapMark('==', inner())); break;
+      case 'CODE': parts.push('`' + n.textContent + '`'); break;
+      case 'SUB': parts.push(`<sub>${inner()}</sub>`); break;
+      case 'SUP': parts.push(`<sup>${inner()}</sup>`); break;
+      case 'BR': parts.push('  \n'); break;
+      case 'A': {
+        const text = inner().trim();
+        if (n.dataset.noteId) {
+          const title = ctx.noteTitle ? ctx.noteTitle(n.dataset.noteId) : null;
+          const t = (title || n.textContent).replace(/[[\]|#^]/g, '');
+          parts.push(t === n.textContent.trim() || !n.textContent.trim() ? `[[${t}]]` : `[[${t}|${n.textContent.replace(/[[\]|]/g, '')}]]`);
+        } else {
+          const href = n.getAttribute('href') || '';
+          parts.push(!text || text === href ? `<${href}>` : `[${text}](${href.replace(/\)/g, '%29')})`);
+        }
+        break;
+      }
+      case 'IMG':
+        if (n.dataset.att) parts.push(embed(n.dataset.att, ctx));
+        else parts.push(`![${(n.alt || '').replace(/[[\]]/g, '')}](${n.getAttribute('src')})`);
+        break;
+      case 'AUDIO': if (n.dataset.att) parts.push(embed(n.dataset.att, ctx)); break;
+      case 'DIV':
+        if (n.classList.contains('audio-block')) { parts.push(embed(n.dataset.att, ctx)); break; }
+        parts.push(inner()); break;
+      default: parts.push(inner());
+    }
+  }
+  return parts.join('');
+}
+
+function wrapMark(m, s) {
+  if (!s.trim()) return s;
+  const lead = s.match(/^\s*/)[0], trail = s.match(/\s*$/)[0];
+  return `${lead}${m}${s.trim()}${m}${trail}`;
+}
+
+function list(el, ctx, level) {
+  const ordered = el.tagName === 'OL';
+  const check = el.classList.contains('checklist');
+  let i = 1, out = '';
+  for (const li of Array.from(el.children)) {
+    if (li.tagName !== 'LI') { if (/^(UL|OL)$/.test(li.tagName)) out += list(li, ctx, level + 1); continue; }
+    const nested = Array.from(li.children).filter((c) => /^(UL|OL)$/.test(c.tagName));
+    const clone = li.cloneNode(true);
+    clone.querySelectorAll(':scope > ul, :scope > ol').forEach((x) => x.remove());
+    const marker = ordered ? `${i++}.` : check ? `- [${li.dataset.checked === 'true' ? 'x' : ' '}]` : '-';
+    const text = blocksInline(clone, ctx);
+    out += `${'    '.repeat(level)}${marker} ${text}\n`;
+    for (const sub of nested) out += list(sub, ctx, level + 1);
+  }
+  return out;
+}
+
+function blocksInline(el, ctx) {
+  return inline(el, ctx).replace(/\s*\n\s*/g, ' ').trim();
+}
+
+function table(el, ctx) {
+  const rows = Array.from(el.querySelectorAll('tr')).map((tr) => Array.from(tr.children).map((c) => blocksInline(c, ctx).replace(/\|/g, '\\|')));
+  if (!rows.length) return '';
+  const w = Math.max(...rows.map((r) => r.length));
+  const fmt = (r) => `| ${Array.from({ length: w }, (_, i) => r[i] || '').join(' | ')} |`;
+  return [fmt(rows[0]), `| ${Array(w).fill('---').join(' | ')} |`, ...rows.slice(1).map(fmt)].join('\n');
+}
+

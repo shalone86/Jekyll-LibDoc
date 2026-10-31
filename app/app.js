@@ -21,6 +21,7 @@ const parseDay = (s) => { const [y, m, d] = s.split('-').map(Number); return new
 const addDays = (s, n) => { const d = parseDay(s); d.setDate(d.getDate() + n); return dayKey(d); };
 const longDate = (s) => { const d = parseDay(s); return `${WEEKDAYS[d.getDay()]}, ${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`; };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const clean = (s) => s.replace(/\s+/g, ' ').trim();
 const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
@@ -560,8 +561,7 @@ const liveNotes = () => data.notes.filter((n) => !n.removed).sort((a, b) => b.up
 const shortDay = (ms) => { const d = new Date(ms); return `${MONTHS[d.getMonth()].slice(0, 3)} ${d.getDate()}`; };
 
 let noteLib = null; // formatting and math (notelib.js), loaded in the background
-import('./notelib.js').then((m) => { noteLib = m; if (openNoteId) showNoteMode(); }).catch(() => {});
-let noteReading = false;
+import('./notelib.js').then((m) => { noteLib = m; const n = openNoteId && (find(data.notes, openNoteId) || openNoteDraft); if (n) loadEditor(n); }).catch(() => {});
 
 let openNoteId = null;
 let openNoteDraft = null; // a new note that hasn't been typed in yet isn't saved
@@ -589,56 +589,12 @@ function openNote(id) {
   if ($('#view-notes').hidden) showView('notes');
   $('#notes-list-pane').hidden = true;
   $('#note-pane').hidden = false;
-  $('#note-text').value = n.text || '';
-  $('#note-math').hidden = true;
+  loadEditor(n);
   $('#note-meta').textContent = n.updated ? `Edited ${shortDay(n.updated)}` : 'New';
   const src = $('#note-src');
   src.hidden = !n.src;
   fill(src, n.src ? ['From ', el('a', { href: n.src, target: '_blank', rel: 'noopener' }, shortUrl(n.src))] : []);
-  noteReading = !!(n.text || '').trim() && !(openNoteDraft && openNoteDraft.id === id);
-  showNoteMode();
   scrollTo(0, 0);
-}
-
-// Read mode shows the formatting (and answers to tick boxes); Edit mode is the plain text with a toolbar.
-function showNoteMode() {
-  const reading = noteReading && !!noteLib;
-  $('#note-read').hidden = !reading;
-  $('#note-text').hidden = reading;
-  $('#note-format').hidden = reading;
-  $('#note-math').hidden = true;
-  $('#note-mode').textContent = reading ? 'Edit' : 'Read';
-  $('#note-mode').hidden = !noteLib;
-  if (reading) renderNoteRead();
-}
-
-function renderNoteRead() {
-  const n = find(data.notes, openNoteId);
-  const box = $('#note-read');
-  box.innerHTML = noteLib.markdownToHtml(n ? n.text : '');
-  [...box.querySelectorAll('ul.checklist > li, ul.checklist li')].forEach((li, i) => {
-    const on = li.dataset.checked === 'true';
-    li.classList.toggle('done', on);
-    li.prepend(el('input', { type: 'checkbox', class: 'note-check', ...(on ? { checked: '' } : {}), 'aria-label': 'Done', onchange: (e) => toggleNoteCheck(i, e.target.checked) }));
-  });
-  if (!box.textContent.trim()) box.append(el('p', { class: 'hint' }, 'Nothing here yet. Tap Edit to write.'));
-}
-
-// The i-th "- [ ]" line in the note (outside code blocks) is ticked or unticked.
-function toggleNoteCheck(i, on) {
-  const n = find(data.notes, openNoteId);
-  if (!n) return;
-  let fence = false;
-  let seen = -1;
-  const lines = n.text.split('\n').map((line) => {
-    if (/^\s*```/.test(line)) { fence = !fence; return line; }
-    if (fence || !/^\s*([-*+]|\d+[.)])\s+\[[ xX]\]/.test(line)) return line;
-    return ++seen === i ? line.replace(/\[[ xX]\]/, on ? '[x]' : '[ ]') : line;
-  });
-  touch(n, { text: lines.join('\n') });
-  $('#note-text').value = n.text;
-  change();
-  renderNoteRead();
 }
 
 function closeNote() {
@@ -660,131 +616,216 @@ function newNote(text = '', extra = {}) {
 function startNote() {
   openNoteDraft = newNote();
   openNote(openNoteDraft.id);
-  $('#note-text').focus();
+  ed().focus();
 }
 
-$('#note-text').addEventListener('input', (e) => {
+/* The note editor is what-you-see-is-what-you-get (a contenteditable). The note is still saved as Markdown text, so
+ * the files in Notes/ stay readable anywhere; the editor turns it into formatted text when a note opens and back when you type. */
+document.execCommand('defaultParagraphSeparator', false, 'p');
+const ed = () => $('#note-editor');
+const editorSel = () => { const s = getSelection(); return s.rangeCount && ed().contains(s.anchorNode) ? s : null; };
+const inTag = (node, tag) => { for (let x = node; x && x !== ed(); x = x.parentNode) if (x.nodeName === tag) return x; return null; };
+
+function loadEditor(n) {
+  const box = ed();
+  if (noteLib) {
+    box.innerHTML = noteLib.markdownToHtml(n.text || '') || '<p><br></p>';
+    box.contentEditable = 'true';
+  } else { // the formatting code is still loading: show the text, read-only, for a moment
+    box.textContent = n.text || '';
+    box.contentEditable = 'false';
+  }
+  box.classList.toggle('blank', !box.textContent.trim());
+  $('#note-panel').hidden = true;
+}
+
+function saveEditor() {
+  if (!noteLib || !openNoteId) return;
+  const box = ed();
+  box.classList.toggle('blank', !box.textContent.trim() && !box.querySelector('li, img'));
+  box.querySelectorAll('ul.checklist li').forEach((li) => { if (!li.dataset.checked) li.dataset.checked = 'false'; });
   let n = find(data.notes, openNoteId);
   if (!n && openNoteDraft && openNoteDraft.id === openNoteId) { n = openNoteDraft; data.notes.push(n); openNoteDraft = null; }
   if (!n) return;
-  touch(n, { text: $('#note-text').value });
-  const ta = $('#note-text');
-  if (noteLib && e.data === '=' && e.inputType === 'insertText' && ta.selectionStart === ta.selectionEnd) {
-    // "12*4 + 3 =" → the answer appears after the "="
-    const caret = ta.selectionStart;
-    const res = noteLib.inlineCalc(ta.value.slice(ta.value.lastIndexOf('\n', caret - 1) + 1, caret));
-    if (res) { replaceNoteText(caret, caret, ` ${res.text}`); return; }
-  }
+  const md = noteLib.htmlToMarkdown(box.innerHTML).replace(/\s+$/, '');
+  if (md === (n.text || '').replace(/\s+$/, '')) return;
+  touch(n, { text: md });
   $('#note-meta').textContent = `Edited ${shortDay(n.updated)}`;
   change();
-});
-$('#note-mode').addEventListener('click', () => {
-  noteReading = !noteReading;
-  showNoteMode();
-  if (!noteReading) $('#note-text').focus();
-});
-// Formatting buttons act on the selected text (or the lines it touches) without taking focus from the text box.
-$('#note-tools').addEventListener('mousedown', (e) => { if (e.target.closest('button[data-fmt]')) e.preventDefault(); });
-$('#note-tools').addEventListener('click', (e) => {
-  const b = e.target.closest('button[data-fmt]');
-  if (b) formatNote(b.dataset.fmt);
-});
-
-function replaceNoteText(start, end, text, selStart = start + text.length, selEnd = selStart) {
-  const ta = $('#note-text');
-  ta.focus();
-  ta.setSelectionRange(start, end);
-  if (!document.execCommand('insertText', false, text)) { // keeps Undo working where the browser allows it
-    ta.setRangeText(text, start, end, 'end');
-    ta.dispatchEvent(new Event('input', { bubbles: true }));
-  }
-  ta.setSelectionRange(selStart, selEnd);
 }
 
-function wrapNote(mark) {
-  const ta = $('#note-text');
-  const { selectionStart: a, selectionEnd: b, value } = ta;
-  const m = mark.length;
-  if (a !== b && value.slice(a - m, a) === mark && value.slice(b, b + m) === mark) { // already wrapped: unwrap
-    replaceNoteText(a - m, b + m, value.slice(a, b), a - m, b - m);
-  } else if (a === b) {
-    replaceNoteText(a, b, mark + mark, a + m);
-  } else {
-    replaceNoteText(a, b, mark + value.slice(a, b) + mark, a + m, b + m);
+ed().addEventListener('input', (e) => {
+  const sel = editorSel();
+  if (sel && e.inputType === 'insertParagraph') { // a new line in a checklist starts unticked
+    const li = inTag(sel.anchorNode, 'LI');
+    if (li && li.parentNode.classList.contains('checklist')) li.dataset.checked = 'false';
   }
+  if (sel && noteLib && e.inputType === 'insertText' && sel.isCollapsed && sel.anchorNode.nodeType === 3) {
+    const node = sel.anchorNode;
+    const before = node.nodeValue.slice(0, sel.anchorOffset);
+    if (e.data === '=') { // "12*4 + 3 =" → the answer appears after the "="
+      const res = noteLib.inlineCalc(before.slice(before.lastIndexOf('\n') + 1));
+      if (res) document.execCommand('insertText', false, ` ${res.text}`);
+    } else if (e.data === ' ' && /^(-|\*|\d+\.)[  ]$/.test(before) && before.length === node.nodeValue.length && /^(P|DIV)$/.test(node.parentNode.nodeName) && node.parentNode.firstChild === node) {
+      // "- " or "1. " at the start of a line becomes a list
+      const numbered = /\d/.test(before);
+      const r = document.createRange();
+      r.setStart(node, 0);
+      r.setEnd(node, node.nodeValue.length);
+      sel.removeAllRanges();
+      sel.addRange(r);
+      document.execCommand('delete');
+      document.execCommand(numbered ? 'insertOrderedList' : 'insertUnorderedList');
+    }
+  }
+  saveEditor();
+});
+
+// Paste as plain text, so copied web pages don't bring their styles along.
+ed().addEventListener('paste', (e) => {
+  e.preventDefault();
+  const text = (e.clipboardData || window.clipboardData).getData('text/plain');
+  if (text) document.execCommand('insertText', false, text);
+});
+
+// Tick boxes in a checklist (tap the box at the left); tap a link to open it once the note is already being edited elsewhere.
+let editorHadFocus = false;
+ed().addEventListener('pointerdown', () => { editorHadFocus = document.activeElement === ed(); });
+ed().addEventListener('click', (e) => {
+  const li = e.target.closest('li');
+  if (li && li.parentNode.classList.contains('checklist') && e.clientX < li.getBoundingClientRect().left + 4) {
+    li.dataset.checked = li.dataset.checked === 'true' ? 'false' : 'true';
+    saveEditor();
+    return;
+  }
+  const a = e.target.closest('a[href]');
+  if (a && !editorHadFocus) { e.preventDefault(); window.open(a.href, '_blank', 'noopener'); }
+});
+
+function toggleHighlight() {
+  const sel = editorSel();
+  if (!sel) return;
+  const mark = inTag(sel.anchorNode, 'MARK');
+  if (mark) {
+    const r = document.createRange();
+    r.selectNode(mark);
+    sel.removeAllRanges();
+    sel.addRange(r);
+    document.execCommand('insertHTML', false, mark.innerHTML);
+    return;
+  }
+  if (sel.isCollapsed) { sel.modify('move', 'backward', 'word'); sel.modify('extend', 'forward', 'word'); }
+  if (sel.isCollapsed) return;
+  const tmp = document.createElement('div');
+  tmp.append(sel.getRangeAt(0).cloneContents());
+  document.execCommand('insertHTML', false, `<mark>${tmp.innerHTML}</mark>\u200b`); // the invisible space keeps what you type next out of the highlight
 }
 
-function prefixNoteLines(kind) {
-  const ta = $('#note-text');
-  const { selectionStart: a, selectionEnd: b, value } = ta;
-  const start = value.lastIndexOf('\n', a - 1) + 1;
-  let end = value.indexOf('\n', b);
-  if (end < 0) end = value.length;
-  const lines = value.slice(start, end).split('\n');
-  const LIST = /^(\s*)(?:[-*+]\s+\[[ xX]\]\s+|[-*+]\s+|\d+[.)]\s+|>\s?|#{1,6}\s+)/;
-  const marks = {
-    ul: [/^\s*[-*+]\s+(?!\[[ xX]\])/, () => '- '],
-    ol: [/^\s*\d+[.)]\s+/, (i) => `${i + 1}. `],
-    check: [/^\s*[-*+]\s+\[[ xX]\]\s+/, () => '- [ ] '],
-    quote: [/^\s*>\s?/, () => '> '],
+function toggleChecklist() {
+  const sel = editorSel();
+  if (!sel) return;
+  let ul = inTag(sel.anchorNode, 'UL');
+  if (!ul) { document.execCommand('insertUnorderedList'); ul = inTag(getSelection().anchorNode, 'UL'); }
+  if (!ul) return;
+  ul.classList.toggle('checklist');
+  ul.querySelectorAll(':scope > li').forEach((li) => { if (ul.classList.contains('checklist')) li.dataset.checked = li.dataset.checked || 'false'; else delete li.dataset.checked; });
+  saveEditor();
+}
+
+function cycleHeading() {
+  const cur = String(document.queryCommandValue('formatBlock')).toLowerCase().replace(/[<>]/g, '');
+  const next = { p: 'h1', div: 'h1', h1: 'h2', h2: 'h3' }[cur] || 'p';
+  document.execCommand('formatBlock', false, `<${next}>`);
+}
+
+let savedRange = null;
+function showPanel(...kids) { fill($('#note-panel'), ...kids); $('#note-panel').hidden = false; }
+
+function linkPanel() {
+  const sel = editorSel();
+  if (sel) savedRange = sel.getRangeAt(0).cloneRange();
+  const a = sel && inTag(sel.anchorNode, 'A');
+  const input = el('input', { type: 'url', placeholder: 'https://…', value: a ? a.getAttribute('href') : '', 'aria-label': 'Link address', autocomplete: 'off' });
+  const apply = (url) => {
+    ed().focus();
+    const s = getSelection();
+    s.removeAllRanges();
+    if (savedRange) s.addRange(savedRange);
+    if (!url) document.execCommand('unlink');
+    else if (s.isCollapsed) document.execCommand('insertHTML', false, `<a href="${esc(url)}">${esc(url)}</a>`);
+    else document.execCommand('createLink', false, url);
+    $('#note-panel').hidden = true;
+    saveEditor();
   };
-  let out = lines;
-  if (kind === 'head') { // none → # → ## → ### → none
-    const level = (/^(#{1,6})\s+/.exec(lines[0]) || [''])[0].trim().length;
-    const body = lines[0].replace(/^#{1,6}\s+/, '');
-    out = [level >= 3 ? body : `${'#'.repeat(level + 1)} ${body}`, ...lines.slice(1)];
-  } else {
-    const [has, make] = marks[kind];
-    const all = lines.every((l) => !l.trim() || has.test(l));
-    out = lines.map((l, i) => (!l.trim() ? l : all ? l.replace(has, '') : make(i) + l.replace(LIST, '$1')));
-  }
-  const text = out.join('\n');
-  replaceNoteText(start, end, text, start, start + text.length);
+  showPanel(el('div', { class: 'add' }, input,
+    el('button', { type: 'button', 'aria-label': 'Add link', onclick: () => { const u = input.value.trim(); apply(/^[a-z]+:/i.test(u) || !u ? u : `https://${u}`); } }, '✓')),
+  a ? el('button', { class: 'link', type: 'button', onclick: () => apply('') }, 'Remove link') : null);
+  input.focus();
 }
 
-function linkNote() {
-  const ta = $('#note-text');
-  const { selectionStart: a, selectionEnd: b, value } = ta;
-  const label = value.slice(a, b) || 'link';
-  const ins = `[${label}](https://)`;
-  replaceNoteText(a, b, ins, a + label.length + 3, a + ins.length - 1);
-}
-
-function mathNote() {
-  const box = $('#note-math');
-  if (!box.hidden) { box.hidden = true; return; }
-  const ta = $('#note-text');
-  const sel = ta.value.slice(ta.selectionStart, ta.selectionEnd);
-  const text = sel || ta.value;
-  const nums = noteLib.extractNumbers(text);
+function mathPanel() {
+  if (!noteLib) return;
+  const sel = editorSel();
+  const picked = sel && !sel.isCollapsed ? sel.toString() : '';
+  const nums = noteLib.extractNumbers(picked || ed().innerText);
   const stats = noteLib.summarize(nums);
   const rows = stats ? [['Sum', stats.sum], ['Average', stats.average], ['Count', stats.count], ['Min', stats.min], ['Max', stats.max], ['Difference', stats.difference], ['Product', stats.product], ['Quotient', stats.quotient]] : [];
-  const at = ta.selectionEnd;
-  fill(box,
-    el('p', { class: 'math-head' }, stats ? `${plural(nums.length, 'number')} in ${sel ? 'your selection' : 'this note'}: ${nums.slice(0, 8).map(noteLib.formatNumber).join(', ')}${nums.length > 8 ? '…' : ''}` : 'No numbers found.'),
+  showPanel(
+    el('p', { class: 'math-head' }, stats ? `${plural(nums.length, 'number')} in ${picked ? 'your selection' : 'this note'}: ${nums.slice(0, 8).map(noteLib.formatNumber).join(', ')}${nums.length > 8 ? '…' : ''}` : 'No numbers found.'),
     rows.map(([label, v]) => el('button', {
       class: 'math-row', type: 'button',
       onclick: () => {
         const value = noteLib.formatNumber(v);
-        if (sel) replaceNoteText(at, at, ` = ${value}`);
-        else { const end = ta.value.length; replaceNoteText(end, end, `${end && !ta.value.endsWith('\n') ? '\n' : ''}**${label}: ${value}**\n`); }
-        box.hidden = true;
+        ed().focus();
+        if (picked) { const s = getSelection(); s.collapseToEnd(); document.execCommand('insertText', false, ` = ${value}`); } else {
+          const r = document.createRange();
+          r.selectNodeContents(ed());
+          r.collapse(false);
+          getSelection().removeAllRanges();
+          getSelection().addRange(r);
+          document.execCommand('insertHTML', false, `<p><b>${label}: ${esc(value)}</b></p>`);
+        }
+        $('#note-panel').hidden = true;
+        saveEditor();
       },
     }, el('span', {}, label), el('b', {}, noteLib.formatNumber(v)), el('span', { class: 'math-ins' }, 'Insert'))),
     el('p', { class: 'hint' }, 'Tip: type something like 12*4 + 3 = and the answer appears.'));
-  box.hidden = false;
 }
 
-function formatNote(kind) {
-  if (!openNoteId) return;
-  if (kind === 'bold') return wrapNote('**');
-  if (kind === 'italic') return wrapNote('*');
-  if (kind === 'strike') return wrapNote('~~');
-  if (kind === 'mark') return wrapNote('==');
-  if (kind === 'link') return linkNote();
-  if (kind === 'math') return noteLib && mathNote();
-  prefixNoteLines(kind);
+const FORMATS = {
+  bold: () => document.execCommand('bold'), italic: () => document.execCommand('italic'),
+  underline: () => document.execCommand('underline'), strike: () => document.execCommand('strikeThrough'),
+  mark: toggleHighlight, head: cycleHeading,
+  ul: () => document.execCommand('insertUnorderedList'), ol: () => document.execCommand('insertOrderedList'),
+  check: toggleChecklist, indent: () => document.execCommand('indent'), outdent: () => document.execCommand('outdent'),
+  link: linkPanel, math: mathPanel,
+};
+$('#note-tools').addEventListener('mousedown', (e) => { if (e.target.closest('button[data-fmt]')) e.preventDefault(); }); // keep the selection
+$('#note-tools').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-fmt]');
+  if (!b || !openNoteId || !noteLib) return;
+  const panelOpen = !$('#note-panel').hidden;
+  $('#note-panel').hidden = true;
+  if ((b.dataset.fmt === 'math' || b.dataset.fmt === 'link') && panelOpen) return; // second tap closes the panel
+  if (!['link', 'math'].includes(b.dataset.fmt)) ed().focus();
+  FORMATS[b.dataset.fmt]();
+  saveEditor();
+  refreshTools();
+});
+
+// Light up the buttons for whatever the cursor is in.
+function refreshTools() {
+  const sel = editorSel();
+  if (!sel) return;
+  const q = (c) => { try { return document.queryCommandState(c); } catch { return false; } };
+  const on = (f, v) => { const b = $(`#note-tools [data-fmt="${f}"]`); if (b) b.classList.toggle('on', !!v); };
+  const ul = inTag(sel.anchorNode, 'UL');
+  on('bold', q('bold')); on('italic', q('italic')); on('underline', q('underline')); on('strike', q('strikeThrough'));
+  on('ul', ul && !ul.classList.contains('checklist')); on('ol', q('insertOrderedList')); on('check', ul && ul.classList.contains('checklist'));
+  on('mark', inTag(sel.anchorNode, 'MARK')); on('head', /^h\d$/.test(String(document.queryCommandValue('formatBlock')).toLowerCase()));
 }
+document.addEventListener('selectionchange', () => { if (openNoteId) refreshTools(); });
+
 $('#new-note').addEventListener('click', startNote);
 $('#note-back').addEventListener('click', closeNote);
 $('#note-search').addEventListener('input', (e) => { noteQuery = clean(e.target.value); renderNotes(); });
@@ -916,7 +957,7 @@ async function receiveShare({ title = '', text = '', url = '' } = {}) {
     if (n.updated !== started || n.removed) { toast('Saved the link (you edited the note, so the article was not added)'); return; }
     touch(n, { text: articleText(art, link) });
     change();
-    if (openNoteId === n.id) $('#note-text').value = n.text;
+    if (openNoteId === n.id) loadEditor(n);
     toast('Article saved to Notes');
   } catch (err) {
     toast('Saved the link, but could not read the article', null, 8000);
@@ -1633,7 +1674,7 @@ const fingerDown = () => pointerDownAt && Date.now() - pointerDownAt < 3000;
 
 function render() {
   if (dragging || fingerDown()) { renderPending = true; return; }
-  if (document.activeElement && document.activeElement.matches('.text, .cost, .limit-amount, .note-text')) {
+  if (document.activeElement && document.activeElement.matches('.text, .cost, .limit-amount, .note-editor')) {
     // Don't yank a line out from under someone who is typing; re-render when they finish.
     renderPending = true;
     return;
@@ -2548,7 +2589,7 @@ $('#backfill-day').addEventListener('change', (e) => {
 $('#edit-habits').addEventListener('click', () => { editingHabits = !editingHabits; render(); });
 
 document.addEventListener('focusout', (e) => {
-  if (e.target.matches && e.target.matches('.text, .cost, .limit-amount, .note-text') && renderPending) setTimeout(render);
+  if (e.target.matches && e.target.matches('.text, .cost, .limit-amount, .note-editor') && renderPending) setTimeout(render);
 });
 
 const VIEWS = { today: 'Today', notes: 'Notes', albums: 'Albums', projects: 'Projects', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
