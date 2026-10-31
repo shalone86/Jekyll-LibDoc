@@ -33,6 +33,7 @@ public class MainActivity extends Activity {
     private WebView web;
     private boolean pageReady = false;
     private String pendingShare = null;
+    private boolean pendingAdd = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -72,6 +73,7 @@ public class MainActivity extends Activity {
 
     /** Something shared to Daily (a link or text) is handed to the page once it has loaded. */
     private void takeShare(Intent intent) {
+        if (intent != null && intent.getBooleanExtra("add_task", false)) pendingAdd = true; // the widget's + button
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
         try {
             JSONObject j = new JSONObject();
@@ -84,7 +86,14 @@ public class MainActivity extends Activity {
     }
 
     private void deliverShare() {
-        if (pendingShare == null || !pageReady) return;
+        if (!pageReady) return;
+        if (pendingAdd) {
+            pendingAdd = false;
+            web.postDelayed(new Runnable() {
+                @Override public void run() { web.evaluateJavascript("window.focusAddTask && focusAddTask()", null); }
+            }, 400);
+        }
+        if (pendingShare == null) return;
         final String js = "window.receiveShare && receiveShare(" + pendingShare + ")";
         pendingShare = null;
         web.postDelayed(new Runnable() {
@@ -197,6 +206,18 @@ public class MainActivity extends Activity {
             }).start();
         }
 
+        /** The open tasks for the home-screen widget, as JSON: [{id, text, sub}]. */
+        @JavascriptInterface
+        public void setWidgetTasks(String json) {
+            TodoWidget.setTasks(a.getApplicationContext(), json);
+        }
+
+        /** Tasks ticked on the widget since the page last asked, as JSON ids; they are forgotten once handed over. */
+        @JavascriptInterface
+        public String takeWidgetDone() {
+            return TodoWidget.takeDone(a.getApplicationContext());
+        }
+
         @JavascriptInterface
         public void shareText(final String title, final String text) {
             a.runOnUiThread(new Runnable() {
@@ -247,5 +268,6 @@ public class MainActivity extends Activity {
     protected void onResume() {
         super.onResume();
         web.onResume();
+        if (pageReady) web.evaluateJavascript("window.applyWidgetDone && applyWidgetDone()", null); // tasks ticked on the widget
     }
 }
