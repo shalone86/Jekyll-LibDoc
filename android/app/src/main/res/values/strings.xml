@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="widget_description">Your to-do list. Tap the circle to check a task off.</string>
+</resources>

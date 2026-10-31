@@ -1694,6 +1694,7 @@ function render() {
   renderSymptomLog();
   renderNotes();
   syncReminders();
+  syncWidget();
 }
 
 /* ---------- reminders (ring the phone through the Android app) ---------- */
@@ -1711,6 +1712,38 @@ function syncReminders() {
   remindersSent = json;
   try { bridge.setReminders(json); } catch { /* the app is older than reminders */ }
 }
+
+/* ---------- home-screen widget (Android) ---------- */
+
+let widgetSent = '';
+// The widget shows the open To do tasks (not subtasks, album steps or things to buy), in the order of the list.
+function syncWidget() {
+  const bridge = window.AndroidApp;
+  if (!bridge || !bridge.setWidgetTasks) return;
+  const list = topTasks(null).slice(0, 40).map((t) => ({ id: t.id, text: t.text.replace(URL_RE, (u) => shortUrl(u)), sub: t.remind ? `⏰ ${remindText(t.remind)}` : '' }));
+  const json = JSON.stringify(list);
+  if (json === widgetSent) return;
+  widgetSent = json;
+  try { bridge.setWidgetTasks(json); } catch { /* the app is older than the widget */ }
+}
+// Tasks ticked on the widget are checked off here the next time the app is open.
+window.applyWidgetDone = () => {
+  const bridge = window.AndroidApp;
+  if (!bridge || !bridge.takeWidgetDone) return;
+  let ids = [];
+  try { ids = JSON.parse(bridge.takeWidgetDone() || '[]'); } catch { return; }
+  const open = ids.map((id) => find(data.tasks, id)).filter((t) => t && !t.doneAt);
+  for (const t of open) completeTask(t.id);
+  if (open.length > 1) toast(`Checked off ${open.length} tasks from the widget`);
+};
+// The widget's + button: go to the To do box, ready to type.
+window.focusAddTask = () => {
+  showView('today');
+  const input = $('#add-task').text;
+  input.scrollIntoView({ block: 'center' });
+  input.focus();
+};
+
 function remindText(ms) {
   const d = new Date(ms);
   const time = d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -2714,12 +2747,14 @@ setInterval(() => {
   else if (!document.hidden && !(document.activeElement && document.activeElement.matches('.limit-amount'))) renderLimits();
 }, 30000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'hidden') { if (syncTimer) sync(); } else { render(); sync(); }
+  if (document.visibilityState === 'hidden') { if (syncTimer) sync(); } else { window.applyWidgetDone(); render(); sync(); }
 });
 addEventListener('online', () => sync());
 // Pick up changes from your other devices while the app stays open: on focus, and once a minute.
 addEventListener('focus', () => sync());
 setInterval(() => { if (!document.hidden && !syncing) sync(); }, 60000);
+
+setTimeout(() => window.applyWidgetDone(), 0);
 
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(() => {});
