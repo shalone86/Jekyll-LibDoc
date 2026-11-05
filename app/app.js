@@ -566,12 +566,14 @@ import('./notelib.js').then((m) => { noteLib = m; const n = openNoteId && (find(
 let openNoteId = null;
 let openNoteDraft = null; // a new note that hasn't been typed in yet isn't saved
 let noteQuery = '';
+let noteTagFilter = store.get('noteTagFilter', null);
 
 function renderNotes() {
   const all = liveNotes();
   $('#note-count').textContent = all.length ? String(all.length) : '';
   const q = noteQuery.toLowerCase();
-  const hits = q ? all.filter((n) => `${n.text}\n${(n.tags || []).join(' ')}`.toLowerCase().includes(q)) : all;
+  let hits = q ? all.filter((n) => `${n.text}\n${(n.tags || []).join(' ')}`.toLowerCase().includes(q)) : all;
+  if (noteTagFilter) hits = hits.filter((n) => (n.tags || []).includes(noteTagFilter));
   fill($('#notes'), hits.length ? hits.map((n) => el('li', { class: 'item note-item' },
     el('button', { class: 'note-open', type: 'button', onclick: () => openNote(n.id) },
       el('span', { class: 'note-name' }, noteTitle(n)),
@@ -579,6 +581,84 @@ function renderNotes() {
       noteBody(n) ? el('span', { class: 'note-snip' }, noteBody(n).slice(0, 110)) : null,
       (n.tags || []).length ? el('span', { class: 'note-tags' }, n.tags.map((t) => el('span', { class: 'note-tag' }, `#${t}`))) : null)))
     : el('li', { class: 'empty' }, q ? 'No matching notes.' : 'No notes yet. Tap + to write one.'));
+  renderNoteTagFilters();
+}
+
+/* ---------- note tags ---------- */
+
+const allNoteTags = () => {
+  const tags = new Set();
+  for (const n of liveNotes()) for (const t of n.tags || []) tags.add(t);
+  return [...tags].sort();
+};
+
+function setNoteTagFilter(tag) {
+  noteTagFilter = tag;
+  store.set('noteTagFilter', tag);
+  renderNotes();
+}
+
+function renderNoteTagFilters() {
+  const tags = allNoteTags();
+  const container = $('#note-tag-filters');
+  if (!tags.length) { container.hidden = true; return; }
+  container.hidden = false;
+  fill(container,
+    el('button', { class: 'chip note-tag-chip', type: 'button', 'aria-pressed': String(!noteTagFilter), onclick: () => setNoteTagFilter(null) }, 'All'),
+    ...tags.map((tag) => el('button', {
+      class: 'chip note-tag-chip', type: 'button', 'aria-pressed': String(noteTagFilter === tag),
+      onclick: () => setNoteTagFilter(noteTagFilter === tag ? null : tag),
+    }, `#${tag}`)),
+    el('button', { class: 'chip more-chip', type: 'button', title: 'Add a tag to this note', onclick: () => { const n = find(data.notes, openNoteId); if (n) addNoteTagInput(n.id); } }, '✎')
+  );
+}
+
+function addNoteTag(nid, tag) {
+  const n = find(data.notes, nid);
+  if (!n) return;
+  tag = tag.trim().replace(/^#/, '');
+  if (!tag || (n.tags || []).includes(tag)) return;
+  touch(n, { tags: [...(n.tags || []), tag] });
+  change();
+  renderNoteTagRow(n);
+  renderNotes();
+}
+
+function removeNoteTag(nid, tag) {
+  const n = find(data.notes, nid);
+  if (!n) return;
+  touch(n, { tags: (n.tags || []).filter((t) => t !== tag) });
+  change();
+  renderNoteTagRow(n);
+  renderNotes();
+}
+
+function addNoteTagInput(nid) {
+  const n = find(data.notes, nid);
+  if (!n) return;
+  const input = el('input', { type: 'text', placeholder: 'new tag', autocomplete: 'off', 'aria-label': 'New tag' });
+  const apply = () => {
+    addNoteTag(nid, input.value);
+    renderNoteTagRow(n);
+  };
+  const container = $('#note-tag-row');
+  fill(container, input,
+    el('button', { type: 'button', 'aria-label': 'Add tag', onclick: apply }, '✓'),
+    el('button', { class: 'link', type: 'button', 'aria-label': 'Cancel', onclick: () => renderNoteTagRow(n) }, 'cancel')
+  );
+  input.focus();
+}
+
+function renderNoteTagRow(n) {
+  const container = $('#note-tag-row');
+  const tags = n.tags || [];
+  fill(container,
+    ...tags.map((tag) => el('span', { class: 'note-tag-pill' },
+      el('span', {}, `#${tag}`),
+      el('button', { class: 'note-tag-remove', type: 'button', 'aria-label': `Remove tag ${tag}`, onclick: (e) => { e.stopPropagation(); removeNoteTag(n.id, tag); } }, '×')
+    )),
+    el('button', { class: 'note-tag-add', type: 'button', 'aria-label': 'Add tag', onclick: () => addNoteTagInput(n.id) }, 'Add tag')
+  );
 }
 
 function openNote(id) {
@@ -594,6 +674,7 @@ function openNote(id) {
   const src = $('#note-src');
   src.hidden = !n.src;
   fill(src, n.src ? ['From ', el('a', { href: n.src, target: '_blank', rel: 'noopener' }, shortUrl(n.src))] : []);
+  renderNoteTagRow(n);
   scrollTo(0, 0);
 }
 
