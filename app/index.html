@@ -87,8 +87,10 @@
         <div id="symptom-chips" class="chips"></div>
         <ul id="symptoms-today" class="list"></ul>
       </section>
+    </section>
 
-      <section class="card" id="sec-limits">
+    <section id="view-limits" hidden>
+      <section class="card">
         <div class="card-head">
           <h2>Limits</h2>
           <button id="add-limit" class="link" type="button">+ Add</button>
@@ -218,15 +220,7 @@
     </section>
   </main>
 
-  <nav class="tabs" aria-label="Views">
-    <button type="button" data-view="today" class="active">Today</button>
-    <button type="button" data-view="notes">Notes</button>
-    <button type="button" data-view="albums">Albums</button>
-    <button type="button" data-view="projects">Projects</button>
-    <button type="button" data-view="buy">To buy<span id="buy-badge" class="badge"></span></button>
-    <button type="button" data-view="archive">Archive</button>
-    <button type="button" data-view="symptoms">Symptoms</button>
-  </nav>
+  <nav class="tabs" aria-label="Views"></nav>
 
   <div id="toast" class="toast" role="status" hidden>
     <span id="toast-text"></span>
@@ -343,6 +337,9 @@
         <label>Branch <input name="branch" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="main"></label>
         <label>Folder <input name="folder" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Todo"></label>
       </div>
+      <p class="hint">Bottom menu order</p>
+      <div id="tab-order" class="tab-order"></div>
+      <p class="hint">Drag a menu button to reorder it, or tap ⋮ on a tab to move it up or down.</p>
       <label>Access token <input name="token" type="password" autocomplete="off" spellcheck="false" placeholder="github_pat_…"></label>
       <p class="hint">Use a fine-grained token that can only reach this one repository, with <b>Contents: Read and write</b>. It is stored only on this device.</p>
       <p id="get-android" class="hint android-link"><a href="daily.apk" download>Get the Android app</a> — opens Daily full-screen, like any other app.</p>

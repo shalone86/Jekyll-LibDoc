@@ -179,6 +179,13 @@ dialog label input { color: var(--ink); font-size: 16px; }
 .actions button.secondary, .more { background: transparent; border: 1px solid var(--line); color: var(--ink); border-radius: 10px; padding: 9px 14px; }
 .error { color: var(--danger); font-size: 14px; }
 
+.tab-order { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 14px; border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--bg); }
+.tab-order-item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+.tab-order-item .tab-handle { color: var(--muted); font-size: 16px; cursor: grab; touch-action: none; user-select: none; }
+.tab-order-item .tab-name { flex: 1; font-size: 14px; color: var(--ink); }
+.tab-order-btn { border: 0; background: none; color: var(--accent); font-size: 20px; line-height: 1; padding: 0 4px; border-radius: 4px; }
+.tab-order-btn:hover { background: var(--accent-soft); }
+
 /* Symptoms */
 :root { --sev1: #3b8c5a; --sev2: #c77d12; --sev3: #c23b2a; }
 @media (prefers-color-scheme: dark) { :root { --sev1: #62c28a; --sev2: #e6a23c; --sev3: #f0715f; } }
