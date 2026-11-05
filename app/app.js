@@ -721,6 +721,14 @@ function startNote() {
 document.execCommand('defaultParagraphSeparator', false, 'p');
 const ed = () => $('#note-editor');
 const editorSel = () => { const s = getSelection(); return s.rangeCount && ed().contains(s.anchorNode) ? s : null; };
+// Scroll the current caret position into view so typing never goes off-screen.
+function scrollCaretIntoView() {
+  const sel = getSelection();
+  if (!sel || !sel.anchorNode) return;
+  const node = sel.anchorNode;
+  const target = node.nodeType === 3 ? node.parentElement : node;
+  if (target && target.isConnected) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
 const inTag = (node, tag) => { for (let x = node; x && x !== ed(); x = x.parentNode) if (x.nodeName === tag) return x; return null; };
 
 function loadEditor(n) {
@@ -776,6 +784,7 @@ ed().addEventListener('input', (e) => {
     }
   }
   saveEditor();
+  scrollCaretIntoView();
 });
 
 // Paste as plain text, so copied web pages don't bring their styles along.
@@ -1748,6 +1757,7 @@ function editableText(text, onRename, { allowEmpty = false, placeholder = null, 
     if (e.key === 'Enter') { e.preventDefault(); span.blur(); }
     if (e.key === 'Escape') { span.textContent = text; span.blur(); }
   });
+  span.addEventListener('input', () => scrollCaretIntoView());
   span.addEventListener('blur', () => {
     if (hasLinks && !span.isContentEditable) return;
     const value = clean(span.textContent);
