@@ -1886,13 +1886,16 @@ function renderToday() {
     // "Part": ticked today, but a several-times habit still needs more checks this period.
     const part = !complete && e !== 'day' && doneOn(h, today);
     const due = !complete && e !== 'day' && daysLeft(e) <= (e === 'week' ? 1 : 2);
-    const n = doneDays(h).length;
     const s = streak(h);
     const unit = EVERY[e].one;
+    const ld = doneDays(h);
+    const n = ld.length;
+    const lastDone = ld.length ? ld[ld.length - 1] : null;
     return el('li', { class: `item habit${complete ? ' done' : ''}${part ? ' part' : ''}${due ? ' due' : ''}${editingHabits ? ' editing' : ''}`, 'data-id': h.id },
       el('span', { class: 'grip', title: 'Drag to reorder', 'aria-hidden': 'true' }, '⋮⋮'),
       el('button', { class: 'check', type: 'button', role: 'checkbox', 'aria-checked': String(complete || part), 'aria-label': h.text, onclick: () => toggleHabit(h.id) }),
       editableText(h.text, (v) => rename(data.habits, h.id, v)),
+      !complete && lastDone ? el('span', { class: 'last-done', title: `Last done ${longDate(lastDone)}` }, `↻ ${agoText(daysBetween(lastDone, today))}`) : null,
       e !== 'day' ? el('span', { class: 'cad', title: need > 1 ? `${cnt} of ${need} this ${unit}` : `Once a ${unit}` }, need > 1 ? `${EVERY[e].tag} ${cnt}/${need}` : EVERY[e].tag) : null,
       editingHabits
         ? el('div', { class: 'habit-tools' },
