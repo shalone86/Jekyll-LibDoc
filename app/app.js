@@ -93,7 +93,7 @@ function normalize(d) {
 }
 
 let data = normalize(store.get('data', null));
-let settings = { owner: '', repo: '', branch: 'main', folder: 'Todo', token: '', ...store.get('settings', {}) };
+let settings = { owner: '', repo: '', branch: 'main', folder: 'Todo', token: '', tabOrder: null, ...store.get('settings', {}) };
 let lastSyncedSha = store.get('lastSyncedSha', null);
 // The commit we last synced with, and whether this device has changes GitHub hasn't seen yet.
 // Together they let the once-a-minute check stop after a single small request when nothing changed.
@@ -2710,17 +2710,93 @@ document.addEventListener('focusout', (e) => {
   if (e.target.matches && e.target.matches('.text, .cost, .limit-amount, .note-editor') && renderPending) setTimeout(render);
 });
 
-const VIEWS = { today: 'Today', notes: 'Notes', albums: 'Albums', projects: 'Projects', buy: 'To buy', archive: 'Archive', symptoms: 'Symptoms' };
-function showView(view) {
-  for (const b of document.querySelectorAll('.tabs button')) {
-    b.classList.toggle('active', b.dataset.view === view);
-    if (b.dataset.view === view) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+const VIEWS = { today: 'Today', notes: 'Notes', limits: 'Limits', buy: 'To buy', albums: 'Albums', archive: 'Archive', projects: 'Projects', symptoms: 'Symptoms' };
+const DEFAULT_TAB_ORDER = ['today', 'notes', 'limits', 'buy', 'albums', 'archive', 'projects', 'symptoms'];
+
+// Make sure tabOrder contains every view exactly once, in a sensible order.
+function normalizeTabOrder(order) {
+  if (!Array.isArray(order) || !order.length) return [...DEFAULT_TAB_ORDER];
+  const seen = new Set();
+  const result = [];
+  for (const v of order) {
+    if (VIEWS[v] && !seen.has(v)) { seen.add(v); result.push(v); }
   }
-  for (const v of Object.keys(VIEWS)) $(`#view-${v}`).hidden = view !== v;
-  $('#title').textContent = VIEWS[view];
+  for (const v of DEFAULT_TAB_ORDER) if (!seen.has(v)) result.push(v);
+  return result;
+}
+
+let currentView = null;
+function showView(view) {
+  if (!VIEWS[view]) view = 'today';
+  currentView = view;
+  const nav = document.querySelector('.tabs');
+  if (nav) {
+    for (const b of nav.querySelectorAll('button')) {
+      b.classList.toggle('active', b.dataset.view === view);
+      if (b.dataset.view === view) b.scrollIntoView({ inline: 'nearest', block: 'nearest' });
+    }
+  }
+  for (const v of Object.keys(VIEWS)) {
+    const el = $(`#view-${v}`);
+    if (el) el.hidden = view !== v;
+  }
+  const title = $('#title');
+  if (title) title.textContent = VIEWS[view];
   scrollTo(0, 0);
 }
-for (const btn of document.querySelectorAll('.tabs button')) btn.addEventListener('click', () => showView(btn.dataset.view));
+
+function renderTabs() {
+  try {
+    const order = normalizeTabOrder(settings.tabOrder);
+    if (!settings.tabOrder || JSON.stringify(settings.tabOrder) !== JSON.stringify(order)) {
+      settings.tabOrder = order;
+      store.set('settings', settings);
+    }
+    const nav = $('.tabs');
+    if (!nav) return;
+    fill(nav, ...order.map((v) => {
+      const label = VIEWS[v];
+      const extra = v === 'buy' ? ' <span id="buy-badge" class="badge"></span>' : '';
+      return el('button', { type: 'button', 'data-view': v, class: v === currentView ? 'active' : '' }, label + extra);
+    }));
+    for (const btn of nav.querySelectorAll('button')) btn.addEventListener('click', () => showView(btn.dataset.view));
+  } catch (err) {
+    console.error('renderTabs failed, falling back to existing tabs', err);
+  }
+}
+
+function moveTab(view, dir) {
+  try {
+    const order = normalizeTabOrder(settings.tabOrder);
+    const i = order.indexOf(view);
+    const j = i + dir;
+    if (j < 0 || j >= order.length) return;
+    order.splice(i, 1, order[j]);
+    order.splice(j, 1, view);
+    settings.tabOrder = order;
+    store.set('settings', settings);
+    renderTabs();
+    renderTabOrderUI();
+  } catch (err) {
+    console.error('moveTab failed', err);
+  }
+}
+
+function renderTabOrderUI() {
+  try {
+    const container = $('#tab-order');
+    if (!container) return;
+    const order = normalizeTabOrder(settings.tabOrder);
+    fill(container, ...order.map((v, i) => el('div', { class: 'tab-order-item' },
+      el('span', { class: 'tab-handle', 'aria-hidden': 'true' }, '⋮⋮'),
+      el('span', { class: 'tab-name' }, VIEWS[v]),
+      i > 0 ? el('button', { class: 'tab-order-btn', type: 'button', 'aria-label': `Move ${VIEWS[v]} up`, onclick: () => moveTab(v, -1) }, '▲') : null,
+      i < order.length - 1 ? el('button', { class: 'tab-order-btn', type: 'button', 'aria-label': `Move ${VIEWS[v]} down`, onclick: () => moveTab(v, 1) }, '▼') : null
+    )));
+  } catch (err) {
+    console.error('renderTabOrderUI failed', err);
+  }
+}
 
 // Android's Back button: close an open dialog, else go back to Today, else let the app close.
 window.handleBack = () => {
@@ -2794,6 +2870,7 @@ const form = $('#settings-form');
 function openSettings() {
   for (const key of ['owner', 'repo', 'branch', 'folder', 'token']) form[key].value = settings[key] || '';
   $('#settings-error').hidden = true;
+  renderTabOrderUI();
   dialog.showModal();
 }
 $('#open-settings').addEventListener('click', openSettings);
@@ -2807,7 +2884,7 @@ form.addEventListener('submit', async (e) => {
   const target = (s) => [s.owner, s.repo, s.branch, s.folder].join('|');
   // A different repo/folder is a fresh start for syncing: merge everything that's there.
   if (target(next) !== target(settings)) { lastSyncedSha = null; store.set('lastSyncedSha', null); lastHeadSha = null; store.set('lastHeadSha', null); }
-  settings = next;
+  settings = { ...settings, ...next };
   store.set('settings', settings);
   $('#settings-save').disabled = true;
   const err = await sync();
@@ -2846,5 +2923,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 }
 
 seedCategories();
+try { renderTabs(); showView(settings.tabOrder[0] || 'today'); } catch (err) { console.error('tabs init failed', err); showView('today'); }
 render();
 sync();
