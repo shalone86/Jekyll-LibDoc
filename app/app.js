@@ -721,13 +721,45 @@ function startNote() {
 document.execCommand('defaultParagraphSeparator', false, 'p');
 const ed = () => $('#note-editor');
 const editorSel = () => { const s = getSelection(); return s.rangeCount && ed().contains(s.anchorNode) ? s : null; };
-// Scroll the current caret position into view so typing never goes off-screen.
+// Scroll the current caret position into view so typing never goes off-screen or behind the bottom tabs.
 function scrollCaretIntoView() {
   const sel = getSelection();
-  if (!sel || !sel.anchorNode) return;
-  const node = sel.anchorNode;
-  const target = node.nodeType === 3 ? node.parentElement : node;
-  if (target && target.isConnected) target.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  if (!sel || !sel.rangeCount) return;
+  const range = sel.getRangeAt(0);
+
+  let rect = null;
+  const rects = range.getClientRects();
+  if (rects.length > 0) {
+    rect = rects[rects.length - 1];
+  } else {
+    const bound = range.getBoundingClientRect();
+    if (bound && (bound.width || bound.height || bound.top || bound.bottom)) {
+      rect = bound;
+    } else {
+      const node = sel.anchorNode;
+      const el = node && node.nodeType === 3 ? node.parentElement : node;
+      if (el && el.getBoundingClientRect) rect = el.getBoundingClientRect();
+    }
+  }
+  if (!rect || (rect.top === 0 && rect.bottom === 0 && rect.height === 0)) return;
+
+  let topSafe = 8;
+  const topBar = document.querySelector('.note-tools') || document.querySelector('.jump');
+  if (topBar && topBar.offsetParent !== null) {
+    const r = topBar.getBoundingClientRect();
+    if (r.bottom > topSafe) topSafe = r.bottom + 8;
+  }
+
+  const tabs = document.querySelector('.tabs');
+  const tabsHeight = tabs && tabs.offsetParent !== null ? tabs.getBoundingClientRect().height : 60;
+  const vpHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+  const bottomSafe = vpHeight - tabsHeight - 16;
+
+  if (rect.bottom > bottomSafe) {
+    window.scrollBy({ top: rect.bottom - bottomSafe });
+  } else if (rect.top < topSafe) {
+    window.scrollBy({ top: rect.top - topSafe });
+  }
 }
 const inTag = (node, tag) => { for (let x = node; x && x !== ed(); x = x.parentNode) if (x.nodeName === tag) return x; return null; };
 
