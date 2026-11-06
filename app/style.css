@@ -335,9 +335,9 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
 
 /* Tasks: subtasks, links, notes, options */
 .item.task { flex-wrap: wrap; }
-.task-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
-.task-main .text { padding: 10px 0 2px; }
-.task-main .text:last-child { padding-bottom: 10px; }
+.task-main, .habit-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.task-main .text, .habit-main .text { padding: 10px 0 2px; }
+.task-main .text:last-child, .habit-main .text:last-child { padding-bottom: 10px; }
 .list.sub { flex-basis: 100%; margin-left: 28px; border-left: 2px solid var(--line); padding-left: 4px; }
 .list.sub > .item { min-height: 40px; }
 .more-btn { flex: none; border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 6px 8px; border-radius: 8px; }
@@ -367,7 +367,7 @@ dialog.doctor { width: 100vw; max-width: 100vw; height: 100vh; max-height: 100vh
   border-radius: 999px; padding: 1px 7px; font-variant-numeric: tabular-nums;
 }
 .last-done {
-  font-size: 11px; color: var(--muted); margin-left: 6px;
+  font-size: 11px; color: var(--muted); margin: 0 0 6px; line-height: 1.2; white-space: nowrap;
 }
 .item.due .cad { color: var(--sev2); border-color: var(--sev2); }
 .item.habit.part .check { background: var(--accent-soft); border-color: var(--accent); }
