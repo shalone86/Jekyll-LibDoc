@@ -92,8 +92,24 @@ function normalize(d) {
   };
 }
 
+const VIEWS = { today: 'Today', notes: 'Notes', limits: 'Limits', buy: 'To buy', albums: 'Albums', archive: 'Archive', projects: 'Projects', symptoms: 'Symptoms' };
+const DEFAULT_TAB_ORDER = ['today', 'notes', 'limits', 'buy', 'albums', 'archive', 'projects', 'symptoms'];
+
+// Make sure tabOrder contains every view exactly once, in a sensible order.
+function normalizeTabOrder(order) {
+  if (!Array.isArray(order) || !order.length) return [...DEFAULT_TAB_ORDER];
+  const seen = new Set();
+  const result = [];
+  for (const v of order) {
+    if (VIEWS[v] && !seen.has(v)) { seen.add(v); result.push(v); }
+  }
+  for (const v of DEFAULT_TAB_ORDER) if (!seen.has(v)) result.push(v);
+  return result;
+}
+
 let data = normalize(store.get('data', null));
-let settings = { owner: '', repo: '', branch: 'main', folder: 'Todo', token: '', tabOrder: null, ...store.get('settings', {}) };
+let settings = { owner: '', repo: '', branch: 'main', folder: 'Todo', token: '', tabOrder: DEFAULT_TAB_ORDER, ...store.get('settings', {}) };
+settings.tabOrder = normalizeTabOrder(settings.tabOrder);
 let lastSyncedSha = store.get('lastSyncedSha', null);
 // The commit we last synced with, and whether this device has changes GitHub hasn't seen yet.
 // Together they let the once-a-minute check stop after a single small request when nothing changed.
@@ -2575,7 +2591,10 @@ function renderCatDialog() {
 function setupJumpBar() {
   const bar = $('#jump');
   for (const b of bar.querySelectorAll('button')) {
-    b.addEventListener('click', () => $(`#${b.dataset.target}`).scrollIntoView({ behavior: 'smooth', block: 'start' }));
+    b.addEventListener('click', () => {
+      const el = $(`#${b.dataset.target}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
   }
   if (!('IntersectionObserver' in window)) return;
   const visible = new Map();
@@ -2584,7 +2603,10 @@ function setupJumpBar() {
     const first = [...bar.querySelectorAll('button')].find((b) => visible.get(b.dataset.target));
     for (const b of bar.querySelectorAll('button')) b.classList.toggle('on', b === first);
   }, { rootMargin: '-110px 0px -55% 0px' });
-  for (const b of bar.querySelectorAll('button')) io.observe($(`#${b.dataset.target}`));
+  for (const b of bar.querySelectorAll('button')) {
+    const s = $(`#${b.dataset.target}`);
+    if (s) io.observe(s);
+  }
 }
 
 /* ---------- drag to reorder (works with mouse and touch) ---------- */
@@ -2710,22 +2732,7 @@ document.addEventListener('focusout', (e) => {
   if (e.target.matches && e.target.matches('.text, .cost, .limit-amount, .note-editor') && renderPending) setTimeout(render);
 });
 
-const VIEWS = { today: 'Today', notes: 'Notes', limits: 'Limits', buy: 'To buy', albums: 'Albums', archive: 'Archive', projects: 'Projects', symptoms: 'Symptoms' };
-const DEFAULT_TAB_ORDER = ['today', 'notes', 'limits', 'buy', 'albums', 'archive', 'projects', 'symptoms'];
-
-// Make sure tabOrder contains every view exactly once, in a sensible order.
-function normalizeTabOrder(order) {
-  if (!Array.isArray(order) || !order.length) return [...DEFAULT_TAB_ORDER];
-  const seen = new Set();
-  const result = [];
-  for (const v of order) {
-    if (VIEWS[v] && !seen.has(v)) { seen.add(v); result.push(v); }
-  }
-  for (const v of DEFAULT_TAB_ORDER) if (!seen.has(v)) result.push(v);
-  return result;
-}
-
-let currentView = null;
+let currentView = 'today';
 function showView(view) {
   if (!VIEWS[view]) view = 'today';
   currentView = view;
@@ -2756,8 +2763,8 @@ function renderTabs() {
     if (!nav) return;
     fill(nav, ...order.map((v) => {
       const label = VIEWS[v];
-      const extra = v === 'buy' ? ' <span id="buy-badge" class="badge"></span>' : '';
-      return el('button', { type: 'button', 'data-view': v, class: v === currentView ? 'active' : '' }, label + extra);
+      const kids = v === 'buy' ? [label, el('span', { id: 'buy-badge', class: 'badge' })] : [label];
+      return el('button', { type: 'button', 'data-view': v, class: v === currentView ? 'active' : '' }, ...kids);
     }));
     for (const btn of nav.querySelectorAll('button')) btn.addEventListener('click', () => showView(btn.dataset.view));
   } catch (err) {
@@ -2771,8 +2778,9 @@ function moveTab(view, dir) {
     const i = order.indexOf(view);
     const j = i + dir;
     if (j < 0 || j >= order.length) return;
-    order.splice(i, 1, order[j]);
-    order.splice(j, 1, view);
+    const tmp = order[i];
+    order[i] = order[j];
+    order[j] = tmp;
     settings.tabOrder = order;
     store.set('settings', settings);
     renderTabs();
