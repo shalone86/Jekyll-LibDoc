@@ -34,6 +34,8 @@ public class MainActivity extends Activity {
     private boolean pageReady = false;
     private String pendingShare = null;
     private boolean pendingAdd = false;
+    private String pendingView = null;
+    private String pendingNoteId = null;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,10 +51,10 @@ public class MainActivity extends Activity {
             @Override
             public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 Uri url = request.getUrl();
-                if (HOST.equals(url.getHost()) && url.getPath() != null && url.getPath().startsWith("/Jekyll-LibDoc")) {
+                if (HOST.equals(url.getHost()) && url.getPath() != null && url.getPath().startsWith("/Jekyll-LibDoc") && !url.getPath().endsWith(".apk")) {
                     return false;
                 }
-                // Anything else (GitHub token page, links in tasks…) opens in the normal browser.
+                // Anything else (GitHub token page, links in tasks, APK download…) opens in the normal browser.
                 startActivity(new Intent(Intent.ACTION_VIEW, url));
                 return true;
             }
@@ -71,9 +73,15 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** Something shared to Daily (a link or text) is handed to the page once it has loaded. */
+    /** Something shared to Daily (a link or text) or a widget shortcut is handed to the page once it has loaded. */
     private void takeShare(Intent intent) {
         if (intent != null && intent.getBooleanExtra("add_task", false)) pendingAdd = true; // the widget's + button
+        if (intent != null && intent.getStringExtra("open_view") != null) {
+            pendingView = intent.getStringExtra("open_view");
+            pendingNoteId = intent.getStringExtra("note_id");
+            intent.removeExtra("open_view");
+            intent.removeExtra("note_id");
+        }
         if (intent == null || !Intent.ACTION_SEND.equals(intent.getAction())) return;
         try {
             JSONObject j = new JSONObject();
@@ -91,6 +99,16 @@ public class MainActivity extends Activity {
             pendingAdd = false;
             web.postDelayed(new Runnable() {
                 @Override public void run() { web.evaluateJavascript("window.focusAddTask && focusAddTask()", null); }
+            }, 400);
+        }
+        if (pendingView != null) {
+            final String viewName = pendingView;
+            final String noteId = pendingNoteId == null ? "" : pendingNoteId;
+            pendingView = null;
+            pendingNoteId = null;
+            final String js = "window.openFromWidget && openFromWidget(" + JSONObject.quote(viewName) + "," + JSONObject.quote(noteId) + ")";
+            web.postDelayed(new Runnable() {
+                @Override public void run() { web.evaluateJavascript(js, null); }
             }, 400);
         }
         if (pendingShare == null) return;
@@ -216,6 +234,24 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public String takeWidgetDone() {
             return TodoWidget.takeDone(a.getApplicationContext());
+        }
+
+        /** Active limits for the home-screen Limits widget, as JSON: [{id, name, sub, dose, doseLabel, ...}]. */
+        @JavascriptInterface
+        public void setWidgetLimits(String json) {
+            LimitsWidget.setLimits(a.getApplicationContext(), json);
+        }
+
+        /** Doses logged on the Limits widget since the page last asked, as JSON: [{id, amount, at}]. */
+        @JavascriptInterface
+        public String takeWidgetDoses() {
+            return LimitsWidget.takeDoses(a.getApplicationContext());
+        }
+
+        /** Recent notes for the home-screen Notes widget, as JSON: [{id, title, sub}]. */
+        @JavascriptInterface
+        public void setWidgetNotes(String json) {
+            NotesWidget.setNotes(a.getApplicationContext(), json);
         }
 
         @JavascriptInterface

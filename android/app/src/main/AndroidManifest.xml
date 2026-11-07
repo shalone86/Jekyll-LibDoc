@@ -32,13 +32,45 @@
         </activity>
 
         <!-- Home-screen to-do list. -->
-        <receiver android:name=".TodoWidget" android:exported="true">
+        <receiver android:name=".TodoWidget" android:label="To do" android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
             </intent-filter>
             <meta-data android:name="android.appwidget.provider" android:resource="@xml/todo_widget_info" />
         </receiver>
         <service android:name=".TodoWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />
+
+        <!-- Home-screen Limits widgets (list and icon). -->
+        <receiver android:name=".LimitsWidget" android:label="Limits (list)" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/limits_widget_info" />
+        </receiver>
+        <service android:name=".LimitsWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />
+
+        <receiver android:name=".LimitsIconWidget" android:label="Limits (icon)" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/limits_icon_widget_info" />
+        </receiver>
+
+        <!-- Home-screen Notes widgets (list and icon). -->
+        <receiver android:name=".NotesWidget" android:label="Notes (list)" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/notes_widget_info" />
+        </receiver>
+        <service android:name=".NotesWidgetService" android:permission="android.permission.BIND_REMOTEVIEWS" android:exported="false" />
+
+        <receiver android:name=".NotesIconWidget" android:label="Notes (icon)" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/notes_icon_widget_info" />
+        </receiver>
 
         <receiver android:name=".AlarmReceiver" android:exported="false" />
         <receiver android:name=".BootReceiver" android:exported="false">

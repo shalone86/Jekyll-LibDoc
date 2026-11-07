@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="widget_description">Your to-do list. Tap the circle to check a task off.</string>
+    <string name="widget_limits_description">Your limits. Tap + on an item to log a dose right from the home screen.</string>
+    <string name="widget_limits_icon_description">Shortcut icon to open Daily directly to Limits.</string>
+    <string name="widget_notes_description">Your notes. Tap a note to view or edit it, or tap + to start a new note.</string>
+    <string name="widget_notes_icon_description">Shortcut icon to open Daily directly to Notes.</string>
 </resources>

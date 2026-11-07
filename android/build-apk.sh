@@ -1,12 +1,18 @@
 #!/usr/bin/env bash
 # Builds the signed APK with only the Android SDK (no Gradle / Maven downloads needed).
 #   ANDROID_HOME=/path/to/android-sdk ./build-apk.sh   →  ../app/daily.apk
-# Needs: platforms;android-34 and build-tools;37.0.0 (sdkmanager), a JDK 17+.
+# Needs: platforms;android-34 (or latest platform) and build-tools, plus a JDK.
 set -euo pipefail
 cd "$(dirname "$0")"
 SDK="${ANDROID_HOME:?set ANDROID_HOME}"
-BT="$SDK/build-tools/${BUILD_TOOLS:-37.0.0}"
-JAR="$SDK/platforms/android-34/android.jar"
+BT_VER="${BUILD_TOOLS:-$(ls -1 "$SDK/build-tools" | sort -V | tail -n 1)}"
+BT="$SDK/build-tools/$BT_VER"
+if [ -f "$SDK/platforms/android-34/android.jar" ]; then
+  JAR="$SDK/platforms/android-34/android.jar"
+else
+  PLAT_VER="$(ls -1 "$SDK/platforms" | sort -V | tail -n 1)"
+  JAR="$SDK/platforms/$PLAT_VER/android.jar"
+fi
 PKG=io.github.shalone86.daily
 VERSION_CODE=$(grep -o "versionCode [0-9]*" app/build.gradle | grep -o "[0-9]*")
 VERSION_NAME=$(grep -o "versionName '[^']*'" app/build.gradle | cut -d"'" -f2)

@@ -886,6 +886,7 @@ function saveEditor() {
   touch(n, { text: md });
   $('#note-meta').textContent = `Edited ${shortDay(n.updated)}`;
   change();
+  syncWidget();
 }
 
 ed().addEventListener('input', (e) => {
@@ -1957,35 +1958,121 @@ function syncReminders() {
   try { bridge.setReminders(json); } catch { /* the app is older than reminders */ }
 }
 
-/* ---------- home-screen widget (Android) ---------- */
+/* ---------- home-screen widgets (Android) ---------- */
 
-let widgetSent = '';
-// The widget shows the open To do tasks (not subtasks, album steps or things to buy), in the order of the list.
+let widgetTasksSent = '';
+let widgetLimitsSent = '';
+let widgetNotesSent = '';
+
+// Feeds the home-screen To do, Limits and Notes widgets so they stay current even when the app closes.
 function syncWidget() {
   const bridge = window.AndroidApp;
-  if (!bridge || !bridge.setWidgetTasks) return;
-  const list = topTasks(null).slice(0, 40).map((t) => ({ id: t.id, text: t.text.replace(URL_RE, (u) => shortUrl(u)), sub: t.remind ? `⏰ ${remindText(t.remind)}` : '' }));
-  const json = JSON.stringify(list);
-  if (json === widgetSent) return;
-  widgetSent = json;
-  try { bridge.setWidgetTasks(json); } catch { /* the app is older than the widget */ }
+  if (!bridge) return;
+  if (bridge.setWidgetTasks) {
+    const list = topTasks(null).slice(0, 40).map((t) => ({ id: t.id, text: t.text.replace(URL_RE, (u) => shortUrl(u)), sub: t.remind ? `⏰ ${remindText(t.remind)}` : '' }));
+    const json = JSON.stringify(list);
+    if (json !== widgetTasksSent) {
+      widgetTasksSent = json;
+      try { bridge.setWidgetTasks(json); } catch { /* older app */ }
+    }
+  }
+  if (bridge.setWidgetLimits) {
+    const now = Date.now();
+    const today = dayKey();
+    const limits = activeLimits().map((l) => {
+      const st = limitStatus(l, l.dose, now);
+      const todaysUsed = limitDoses(l.id).filter((x) => x.day === today).reduce((s, x) => s + x.amount, 0);
+      let state = 'OK';
+      if (st.never) state = 'Over limit';
+      else if (st.okAt && st.reason === 'day') state = 'Done for today';
+      else if (st.okAt) state = `Wait until ${clock(st.okAt)}`;
+      const parts = [state];
+      if (l.windowMax && l.windowHours) parts.push(`Past ${l.windowHours}h: ${amt(st.windowUsed)}/${withUnit(l.windowMax, l.unit)}`);
+      if (l.dayMax) parts.push(`Today: ${amt(st.dayUsed)}/${withUnit(l.dayMax, l.unit)}`);
+      else if (!l.windowMax) parts.push(`Today: ${withUnit(todaysUsed, l.unit)}`);
+      return {
+        id: l.id, name: l.name, sub: parts.join(' · '),
+        dose: l.dose, unit: l.unit || '', doseLabel: `+${withUnit(l.dose, l.unit)}`,
+        dayUsed: l.dayMax ? st.dayUsed : todaysUsed, dayMax: l.dayMax || 0,
+        windowUsed: st.windowUsed, windowMax: l.windowMax || 0, windowHours: l.windowHours || 0,
+      };
+    });
+    const json = JSON.stringify(limits);
+    if (json !== widgetLimitsSent) {
+      widgetLimitsSent = json;
+      try { bridge.setWidgetLimits(json); } catch { /* older app */ }
+    }
+  }
+  if (bridge.setWidgetNotes) {
+    const notes = liveNotes().slice(0, 40).map((n) => {
+      const tagsStr = (n.tags || []).map((t) => `#${t}`).join(' ');
+      const bodySnip = noteBody(n).replace(/\s+/g, ' ').trim().slice(0, 80);
+      const sub = [tagsStr, bodySnip || shortDay(n.updated)].filter(Boolean).join(' · ');
+      return { id: n.id, title: noteTitle(n), sub };
+    });
+    const json = JSON.stringify(notes);
+    if (json !== widgetNotesSent) {
+      widgetNotesSent = json;
+      try { bridge.setWidgetNotes(json); } catch { /* older app */ }
+    }
+  }
 }
-// Tasks ticked on the widget are checked off here the next time the app is open.
+
+// Tasks ticked or limit doses logged on a home-screen widget are recorded here the next time the app opens.
 window.applyWidgetDone = () => {
   const bridge = window.AndroidApp;
-  if (!bridge || !bridge.takeWidgetDone) return;
-  let ids = [];
-  try { ids = JSON.parse(bridge.takeWidgetDone() || '[]'); } catch { return; }
-  const open = ids.map((id) => find(data.tasks, id)).filter((t) => t && !t.doneAt);
-  for (const t of open) completeTask(t.id);
-  if (open.length > 1) toast(`Checked off ${open.length} tasks from the widget`);
+  if (!bridge) return;
+  if (bridge.takeWidgetDone) {
+    let ids = [];
+    try { ids = JSON.parse(bridge.takeWidgetDone() || '[]'); } catch { ids = []; }
+    const open = ids.map((id) => find(data.tasks, id)).filter((t) => t && !t.doneAt);
+    for (const t of open) completeTask(t.id);
+    if (open.length > 1) toast(`Checked off ${open.length} tasks from the widget`);
+  }
+  if (bridge.takeWidgetDoses) {
+    let doses = [];
+    try { doses = JSON.parse(bridge.takeWidgetDoses() || '[]'); } catch { doses = []; }
+    let logged = 0;
+    for (const entry of doses) {
+      const l = find(data.limits, entry.id);
+      if (!l) continue;
+      const d = new Date(entry.at || Date.now());
+      const amount = Number(entry.amount) > 0 ? Number(entry.amount) : l.dose;
+      data.doses.push({ id: uid(), limitId: l.id, amount, at: d.getTime(), day: dayKey(d), time: nowTime(d), removed: false, updated: Date.now() });
+      logged++;
+    }
+    if (logged > 0) {
+      change();
+      if (logged > 1) toast(`Logged ${logged} doses from the widget`);
+    }
+  }
 };
-// The widget's + button: go to the To do box, ready to type.
+
+// The To-do widget's + button: go to the To do box, ready to type.
 window.focusAddTask = () => {
   showView('today');
   const input = $('#add-task').text;
   input.scrollIntoView({ block: 'center' });
   input.focus();
+};
+
+// Opens a specific section, note or dialog when tapped from the Limits or Notes home-screen widgets.
+window.openFromWidget = (target, noteId) => {
+  if (target === 'limits') {
+    showView('limits');
+  } else if (target === 'add_limit') {
+    showView('limits');
+    openLimitDialog();
+  } else if (target === 'notes') {
+    if (openNoteId) closeNote();
+    showView('notes');
+  } else if (target === 'new_note') {
+    showView('notes');
+    startNote();
+  } else if (target === 'note' && noteId) {
+    showView('notes');
+    openNote(noteId);
+  }
 };
 
 function remindText(ms) {
@@ -2961,7 +3048,15 @@ window.handleBack = () => {
   if ($('#view-today').hidden) { showView('today'); return true; }
   return false;
 };
-if (androidApp) $('#get-android').hidden = true;
+if (androidApp) {
+  if (androidApp.setWidgetLimits && androidApp.setWidgetNotes) {
+    $('#get-android').hidden = true;
+  } else {
+    fill($('#get-android'),
+      el('a', { href: 'https://github.com/shalone86/Jekyll-LibDoc/raw/master/app/daily.apk' }, 'Update the Android app'),
+      ' — adds the Limits and Notes home-screen widgets.');
+  }
+}
 
 bindAdd($('#add-album'), (name) => addAlbum(name, 'album'));
 bindAdd($('#add-project'), (name) => addAlbum(name, 'project'));
