@@ -602,10 +602,13 @@ function renderNotes() {
 
 /* ---------- note tags ---------- */
 
+const getNote = (nid) => find(data.notes, nid) || (openNoteDraft && openNoteDraft.id === nid ? openNoteDraft : null);
+
 const allNoteTags = () => {
   const tags = new Set();
   for (const n of liveNotes()) for (const t of n.tags || []) tags.add(t);
-  return [...tags].sort();
+  if (openNoteDraft) for (const t of openNoteDraft.tags || []) tags.add(t);
+  return [...tags].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 };
 
 function setNoteTagFilter(tag) {
@@ -624,43 +627,137 @@ function renderNoteTagFilters() {
     ...tags.map((tag) => el('button', {
       class: 'chip note-tag-chip', type: 'button', 'aria-pressed': String(noteTagFilter === tag),
       onclick: () => setNoteTagFilter(noteTagFilter === tag ? null : tag),
-    }, `#${tag}`)),
-    el('button', { class: 'chip more-chip', type: 'button', title: 'Add a tag to this note', onclick: () => { const n = find(data.notes, openNoteId); if (n) addNoteTagInput(n.id); } }, '✎')
+    }, `#${tag}`))
   );
 }
 
-function addNoteTag(nid, tag) {
-  const n = find(data.notes, nid);
-  if (!n) return;
-  tag = tag.trim().replace(/^#/, '');
-  if (!tag || (n.tags || []).includes(tag)) return;
-  touch(n, { tags: [...(n.tags || []), tag] });
-  change();
-  renderNoteTagRow(n);
+function addNoteTag(nid, tag, { keepOpen = false } = {}) {
+  const n = getNote(nid);
+  if (!n) return false;
+  tag = tag.trim().replace(/^#+/, '');
+  if (!tag) return false;
+  const existing = allNoteTags().find((t) => t.toLowerCase() === tag.toLowerCase());
+  if (existing) tag = existing;
+  if ((n.tags || []).some((t) => t.toLowerCase() === tag.toLowerCase())) return false;
+  const nextTags = [...(n.tags || []), tag];
+  if (find(data.notes, nid)) {
+    touch(n, { tags: nextTags });
+    change();
+  } else {
+    n.tags = nextTags;
+  }
+  if (!keepOpen) renderNoteTagRow(n);
   renderNotes();
+  return true;
 }
 
-function removeNoteTag(nid, tag) {
-  const n = find(data.notes, nid);
+function removeNoteTag(nid, tag, { keepOpen = false } = {}) {
+  const n = getNote(nid);
   if (!n) return;
-  touch(n, { tags: (n.tags || []).filter((t) => t !== tag) });
-  change();
-  renderNoteTagRow(n);
+  const nextTags = (n.tags || []).filter((t) => t !== tag);
+  if (find(data.notes, nid)) {
+    touch(n, { tags: nextTags });
+    change();
+  } else {
+    n.tags = nextTags;
+  }
+  if (!keepOpen) renderNoteTagRow(n);
   renderNotes();
 }
 
 function addNoteTagInput(nid) {
-  const n = find(data.notes, nid);
+  const n = getNote(nid);
   if (!n) return;
-  const input = el('input', { type: 'text', placeholder: 'new tag', autocomplete: 'off', 'aria-label': 'New tag' });
-  const apply = () => {
-    addNoteTag(nid, input.value);
-    renderNoteTagRow(n);
-  };
   const container = $('#note-tag-row');
-  fill(container, input,
-    el('button', { type: 'button', 'aria-label': 'Add tag', onclick: apply }, '✓'),
-    el('button', { class: 'link', type: 'button', 'aria-label': 'Cancel', onclick: () => renderNoteTagRow(n) }, 'cancel')
+  const pillsWrap = el('div', { class: 'note-tag-pills' });
+  const input = el('input', {
+    class: 'note-tag-input', type: 'text', placeholder: 'Type or pick a tag…',
+    autocomplete: 'off', enterkeyhint: 'done', 'aria-label': 'New tag',
+  });
+  const suggestions = el('div', { class: 'note-tag-suggestions' });
+
+  const matchingTags = () => {
+    const raw = input.value.trim().replace(/^#+/, '');
+    const q = raw.toLowerCase();
+    const currentLower = new Set((n.tags || []).map((t) => t.toLowerCase()));
+    const available = allNoteTags().filter((t) => !currentLower.has(t.toLowerCase()));
+    if (!q) return { raw, q, matches: available, exactExists: false };
+    const prefix = available.filter((t) => t.toLowerCase().startsWith(q));
+    const substr = available.filter((t) => !t.toLowerCase().startsWith(q) && t.toLowerCase().includes(q));
+    const exactExists = allNoteTags().some((t) => t.toLowerCase() === q) || currentLower.has(q);
+    return { raw, q, matches: [...prefix, ...substr], exactExists };
+  };
+
+  const renderPills = () => {
+    const tags = n.tags || [];
+    fill(pillsWrap, ...tags.map((tag) => el('span', { class: 'note-tag-pill' },
+      el('span', {}, `#${tag}`),
+      el('button', {
+        class: 'note-tag-remove', type: 'button', 'aria-label': `Remove tag ${tag}`,
+        onclick: (e) => { e.stopPropagation(); removeNoteTag(nid, tag, { keepOpen: true }); renderPills(); renderSuggestions(); },
+      }, '×')
+    )));
+  };
+
+  const pickTag = (tag) => {
+    addNoteTag(nid, tag, { keepOpen: true });
+    input.value = '';
+    renderPills();
+    renderSuggestions();
+  };
+
+  const renderSuggestions = () => {
+    const { raw, q, matches, exactExists } = matchingTags();
+    fill(suggestions,
+      ...matches.map((tag, i) => el('button', {
+        class: `chip note-tag-suggest${q && i === 0 ? ' best-match' : ''}`,
+        type: 'button',
+        onclick: () => pickTag(tag),
+      }, `#${tag}`)),
+      raw && !exactExists
+        ? el('button', { class: 'chip add-chip note-tag-suggest', type: 'button', onclick: () => pickTag(raw) }, `+ #${raw}`)
+        : null
+    );
+  };
+
+  const apply = () => {
+    const raw = input.value.trim().replace(/^#+/, '');
+    if (!raw) {
+      renderNoteTagRow(n);
+      return;
+    }
+    pickTag(raw);
+    input.focus();
+  };
+
+  input.addEventListener('input', renderSuggestions);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      apply();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      renderNoteTagRow(n);
+    } else if (e.key === 'Tab') {
+      const { q, matches } = matchingTags();
+      if (q && matches.length) {
+        e.preventDefault();
+        input.value = matches[0];
+        renderSuggestions();
+      }
+    }
+  });
+
+  renderPills();
+  renderSuggestions();
+  fill(container,
+    pillsWrap,
+    el('div', { class: 'note-tag-input-wrap' },
+      input,
+      el('button', { class: 'note-tag-submit', type: 'button', 'aria-label': 'Add tag', onclick: apply }, 'Add'),
+      el('button', { class: 'link note-tag-cancel', type: 'button', 'aria-label': 'Done', onclick: () => renderNoteTagRow(n) }, 'Done')
+    ),
+    suggestions
   );
   input.focus();
 }
@@ -673,7 +770,7 @@ function renderNoteTagRow(n) {
       el('span', {}, `#${tag}`),
       el('button', { class: 'note-tag-remove', type: 'button', 'aria-label': `Remove tag ${tag}`, onclick: (e) => { e.stopPropagation(); removeNoteTag(n.id, tag); } }, '×')
     )),
-    el('button', { class: 'note-tag-add', type: 'button', 'aria-label': 'Add tag', onclick: () => addNoteTagInput(n.id) }, 'Add tag')
+    el('button', { class: 'note-tag-add', type: 'button', 'aria-label': 'Add tag', onclick: () => addNoteTagInput(n.id) }, '+ Add tag')
   );
 }
 
@@ -817,6 +914,14 @@ ed().addEventListener('input', (e) => {
   }
   saveEditor();
   scrollCaretIntoView();
+});
+
+ed().addEventListener('focus', () => {
+  const tagInput = $('#note-tag-row .note-tag-input');
+  if (tagInput && !tagInput.value.trim()) {
+    const n = getNote(openNoteId);
+    if (n) renderNoteTagRow(n);
+  }
 });
 
 // Paste as plain text, so copied web pages don't bring their styles along.
