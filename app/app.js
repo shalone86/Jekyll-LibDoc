@@ -48,7 +48,7 @@ const fill = (node, ...kids) => node.replaceChildren(...kids.flat().filter((k) =
  * limits: { id, name, unit, dose, windowMax, windowHours, dayMax, order, retired, updated }
  * doses:  { id, limitId, amount, at, day, time, removed, updated }   one logged amount of a limited thing
  * Things to buy are tasks with buy: true, plus dueMonth ('YYYY-MM', or null for someday),
- * whenLabel (e.g. 'Spring') and an optional cost.
+ * whenLabel (e.g. 'Spring') and an optional cost. milestone: 'full' means "when I have 100% VA pay" (no month).
  * Tasks may also have: cat (category id), parentId (subtask of another task), collapsed (hide its subtasks), remind (ms timestamp to ring the phone) and remindLoud, note ({ id, title }: a
  * link to one of the notes).
  * Albums have kind 'album' (music) or 'project' (anything else); both have steps and sessions.
@@ -1377,17 +1377,20 @@ function nextMonthNumbered(n) {
 // What the "When" menu offers: a few named times, then the next 12 months.
 function whenOptions() {
   const cur = monthKey();
-  const opts = [['someday', 'Someday'], ['m:' + cur, 'This month'], ['m:' + addMonths(cur, 1), 'Next month']];
+  const opts = [['someday', 'Someday'], ['full', 'When 100% (VA pay)'], ['m:' + cur, 'This month'], ['m:' + addMonths(cur, 1), 'Next month']];
   for (const [label, n] of Object.entries(WHEN_MONTHS)) opts.push([`w:${label}`, `${label} (${monthName(nextMonthNumbered(n)).replace(/ \d{4}$/, '')})`]);
   for (let i = 2; i < 13; i++) opts.push(['m:' + addMonths(cur, i), monthName(addMonths(cur, i))]);
   return opts;
 }
 function parseWhen(value) {
-  if (value.startsWith('w:')) { const label = value.slice(2); return { dueMonth: nextMonthNumbered(WHEN_MONTHS[label]), whenLabel: label }; }
-  if (value.startsWith('m:')) return { dueMonth: value.slice(2), whenLabel: null };
-  return { dueMonth: null, whenLabel: null };
+  if (value.startsWith('w:')) { const label = value.slice(2); return { dueMonth: nextMonthNumbered(WHEN_MONTHS[label]), whenLabel: label, milestone: null }; }
+  if (value.startsWith('m:')) return { dueMonth: value.slice(2), whenLabel: null, milestone: null };
+  if (value === 'full') return { dueMonth: null, whenLabel: null, milestone: 'full' };
+  return { dueMonth: null, whenLabel: null, milestone: null };
 }
-const whenText = (t) => (!t.dueMonth ? 'Someday' : t.whenLabel ? `${t.whenLabel} · ${monthName(t.dueMonth)}` : monthName(t.dueMonth));
+// Sort order for things to buy: by month, then Someday, then the 100% pay milestone.
+const buyOrder = (t) => (t.milestone ? '9999-b' : t.dueMonth || '9999-a');
+const whenText = (t) => (t.milestone === 'full' ? 'When 100%' : !t.dueMonth ? 'Someday' : t.whenLabel ? `${t.whenLabel} · ${monthName(t.dueMonth)}` : monthName(t.dueMonth));
 const buyItems = () => data.tasks.filter((t) => t.buy && !t.doneAt);
 const dueBuys = () => buyItems().filter((t) => t.dueMonth && t.dueMonth <= monthKey()).sort((a, b) => a.dueMonth.localeCompare(b.dueMonth) || byOrder(a, b));
 const money = (n) => `$${Number(n).toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
@@ -1405,7 +1408,7 @@ function addBuy(text, when, cost) {
 }
 function snoozeBuy(id) {
   const t = find(data.tasks, id);
-  touch(t, { dueMonth: addMonths(t.dueMonth && t.dueMonth > monthKey() ? t.dueMonth : monthKey(), 1), whenLabel: null });
+  touch(t, { dueMonth: addMonths(t.dueMonth && t.dueMonth > monthKey() ? t.dueMonth : monthKey(), 1), whenLabel: null, milestone: null });
   change();
   toast(`“${t.text}” moved to ${monthName(t.dueMonth)}`);
 }
@@ -1633,7 +1636,7 @@ function todoMarkdown() {
   }
   lines.push('', '## Tasks', '');
   lines.push(...taskTreeMd(topTasks()));
-  const buys = buyItems().sort((a, b) => (a.dueMonth || '9999').localeCompare(b.dueMonth || '9999') || byOrder(a, b));
+  const buys = buyItems().sort((a, b) => buyOrder(a).localeCompare(buyOrder(b)) || byOrder(a, b));
   if (buys.length) {
     lines.push('', '## To buy', '');
     for (const t of buys) lines.push(`- [ ] ${t.text} — ${whenText(t)}${t.cost ? `, ${money(t.cost)}` : ''}`);
@@ -2499,12 +2502,12 @@ function renderBuys() {
   if ($('#buy-when').value !== lastWhen) $('#buy-when').value = 'someday';
 
   const groups = new Map();
-  const sorted = buyItems().sort((a, b) => (a.dueMonth || '9999').localeCompare(b.dueMonth || '9999') || byOrder(a, b));
+  const sorted = buyItems().sort((a, b) => buyOrder(a).localeCompare(buyOrder(b)) || byOrder(a, b));
   for (const t of sorted) {
-    const key = !t.dueMonth ? 'someday' : t.dueMonth <= cur ? 'now' : t.dueMonth;
+    const key = t.milestone === 'full' ? 'full' : !t.dueMonth ? 'someday' : t.dueMonth <= cur ? 'now' : t.dueMonth;
     (groups.get(key) || groups.set(key, []).get(key)).push(t);
   }
-  const title = (key) => (key === 'now' ? 'Now' : key === 'someday' ? 'Someday' : key === addMonths(cur, 1) ? `Next month · ${monthName(key)}` : monthName(key));
+  const title = (key) => (key === 'now' ? 'Now' : key === 'someday' ? 'Someday' : key === 'full' ? 'When I have 100% VA pay' : key === addMonths(cur, 1) ? `Next month · ${monthName(key)}` : monthName(key));
   fill($('#buy-groups'), groups.size ? [...groups].map(([key, items]) => {
     const total = items.reduce((sum, t) => sum + (t.cost || 0), 0);
     return el('section', { class: `card${key === 'now' ? ' due-card' : ''}` },
